@@ -1,10 +1,13 @@
+using InstagramEmbedForDiscord.DAL;
 using InstagramEmbedForDiscord.Models;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Newtonsoft.Json;
 using System;
 using System.Diagnostics;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Security.Claims;
 using System.Text.Json.Serialization;
 
 namespace InstagramEmbedForDiscord.Controllers
@@ -17,6 +20,37 @@ namespace InstagramEmbedForDiscord.Controllers
         public HomeController(ILogger<HomeController> logger)
         {
             _logger = logger;
+        }
+
+        public override void OnActionExecuting(ActionExecutingContext context)
+        {
+            base.OnActionExecuting(context);
+
+
+            var httpContext = context.HttpContext;
+            var identity = httpContext.User.Identity as ClaimsIdentity;
+            var roleClaim = identity?.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role);
+            string? role = roleClaim?.Value?.ToLower();
+
+
+
+            var ipAddress = ActionLog.GetClientIpAddress(httpContext);
+            var userAgent = httpContext.Request.Headers["User-Agent"].ToString();
+            var httpMethod = httpContext.Request.Method;
+            var endPointName = context.ActionDescriptor.DisplayName;
+            var requestedUrl = httpContext.Request.Path + httpContext.Request.QueryString;
+
+            Task.Run(() =>
+            {
+                using var scope = httpContext.RequestServices.CreateScope();
+                var dbContext = scope.ServiceProvider.GetRequiredService<KitContext>();
+
+                var log = ActionLog.CreateActionLog(httpContext);
+
+                dbContext.ActionLogs.Add(log);
+                dbContext.SaveChanges();
+            });
+
         }
 
         public async Task<IActionResult> Index(string type, string id)
