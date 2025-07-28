@@ -42,8 +42,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
             Task.Run(() =>
             {
-                using var scope = httpContext.RequestServices.CreateScope();
-                var dbContext = scope.ServiceProvider.GetRequiredService<KitContext>();
+                var dbContext = new KitContext();
 
                 var log = ActionLog.CreateActionLog(httpContext);
 
