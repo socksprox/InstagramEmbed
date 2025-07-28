@@ -51,7 +51,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
             catch (Exception e)
             {
-                return View(new { });
+                return View("Error");
 
             }
         }
