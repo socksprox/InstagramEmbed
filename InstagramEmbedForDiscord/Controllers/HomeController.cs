@@ -9,7 +9,7 @@ using System.Text.Json.Serialization;
 
 namespace InstagramEmbedForDiscord.Controllers
 {
-    [Route("p/{id}")]
+    [Route("{type}/{id}")]
     public class HomeController : Controller
     {
         private readonly ILogger<HomeController> _logger;
@@ -19,7 +19,7 @@ namespace InstagramEmbedForDiscord.Controllers
             _logger = logger;
         }
 
-        public async Task<IActionResult> Index(string id)
+        public async Task<IActionResult> Index(string type, string id)
         {
             try
             {
