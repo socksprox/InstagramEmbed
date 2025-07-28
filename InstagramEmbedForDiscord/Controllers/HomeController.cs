@@ -64,6 +64,11 @@ namespace InstagramEmbedForDiscord.Controllers
             }
         }
 
+        [Route("/")]
+        public IActionResult HomePage()
+        {
+            return View();
+        }
         
     }
 
