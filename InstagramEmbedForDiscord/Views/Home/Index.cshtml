@@ -1,30 +1,14 @@
 ﻿@model string[]
 @{
     Layout = null;
-
     string contentUrl = Model[0];
     string thumbnailUrl = Model[1];
     string url = Model[2];
-    bool isPhoto = ViewBag.IsPhoto;
-
 }
-
-
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
-
-<!-- Open Graph video metadata (only what's needed for video embed) -->
-    @if(isPhoto)
-    {
-        <meta property="og:url" content="@url" />
-        <meta property="og:type" content="video.other" />
-        <meta property="og:image" content="@contentUrl" />
-
-        <meta name="twitter:image" content="@contentUrl" />
-    }
     else
     {
         <meta property="og:type" content="video.other" />
@@ -33,51 +17,29 @@
         <meta property="og:video:type" content="video/mp4" />
         <meta name="twitter:player" content="@url" />
     }
-
-
-        <meta property="theme-color" content="#2b2d31" />
-        <title>InstagramEmbed</title>
-
+    <title>InstagramEmbed</title>
 </head>
-
 <body class="d-flex flex-column vh-100 justify-content-center">
-        <div class="col-md-3 col-12 mx-auto card card-body my-auto shadow px-0 py-0" style="height:fit-content;flex:0;border-radius:1rem">
-                <div class="media-container w-100">
-            @if(isPhoto)
-            {
-                <img class="post-media" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" src="@contentUrl">
-
-                </img>
-            }
-
-            else{
-                <video class="post-media w-100" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" controls>
+    <div class="col-lg-3 col-md-6 col-sm-8 col-11 mx-auto card card-body my-auto shadow px-0 py-0" style="height:fit-content;flex:0;border-radius:1rem">
+        <div class="media-container w-100">
+            <video class="post-media w-100" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" controls>
                 <source src="@contentUrl}" type="video/mp4">
                 Your browser does not support the video tag.
             </video>
-            }
-      
-  
-            
-           
-     
-                </div>
-                <div class="content">
-                        <div class="d-flex flex-column p-3 pb-0 gap-2">
-                                <button class="btn btn-success"
-                                        onclick="window.location.href='@contentUrl'">
-                                        Download Post
-                                </button>
-                                <button class="btn btn-primary"
-                                        onclick="window.location.href='@url'">
-                                        View Original Post
-                                </button>
-                        </div>
-                </div>
-
-                <div class="text-secondary px-3 py-2">InstagramEmbed by <a href="https://github.com/lainmode" target="_blank">Lainmode</a></div>
         </div>
+        <div class="content">
+            <div class="d-flex flex-column p-3 pb-0 gap-2">
+                <button class="btn btn-success"
+                        onclick="window.location.href='@contentUrl'">
+                    Download Post
+                </button>
+                <button class="btn btn-primary"
+                        onclick="window.location.href='@url'">
+                    View Original Post
+                </button>
+            </div>
+        </div>
+        <div class="text-secondary px-3 py-2">InstagramEmbed by <a href="https://github.com/lainmode" target="_blank">Lainmode</a></div>
+    </div>
 </body>
-
 </html>
-

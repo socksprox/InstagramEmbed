@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
 using System;
 using System.Diagnostics;
+using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text.Json.Serialization;
 
@@ -29,7 +30,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 using (HttpClient client = new HttpClient())
                 {
-                    var response = await client.GetAsync("http://localhost:3100/igdl?url=" + link);
+                    var response = await client.GetAsync("http://alsauce.com:3100/igdl?url=" + link);
                     var responseString = await response.Content.ReadAsStringAsync();
                     var result = JsonConvert.DeserializeObject<InstagramResponse>(responseString)!;
 
@@ -41,11 +42,18 @@ namespace InstagramEmbedForDiscord.Controllers
                     var contentTypeResponse = await client.SendAsync(request);
                     
                     var contentDisposition = contentTypeResponse.Content.Headers.ContentDisposition;
-                    ViewBag.IsPhoto=contentDisposition != null && contentDisposition.FileName != null && !contentDisposition.FileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase);
+                    bool isPhoto = contentDisposition != null && contentDisposition.FileName != null && !contentDisposition.FileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase);
 
+                    if (isPhoto)
+                    {
+                        var imageBytes = await client.GetByteArrayAsync(contentUrl);
+                        return File(imageBytes, "image/jpeg");
+                    }
+                
                 }
 
                 string[] data = { contentUrl, thumbnailUrl, link };
+                ViewBag.IsPhoto = false;
                  return View(data);
             }
 
