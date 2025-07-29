@@ -25,21 +25,8 @@ namespace InstagramEmbedForDiscord.Controllers
         public override void OnActionExecuting(ActionExecutingContext context)
         {
             base.OnActionExecuting(context);
-
-
             var httpContext = context.HttpContext;
-            var identity = httpContext.User.Identity as ClaimsIdentity;
-            var roleClaim = identity?.Claims.FirstOrDefault(c => c.Type == ClaimTypes.Role);
-            string? role = roleClaim?.Value?.ToLower();
-
-
-
-            var ipAddress = ActionLog.GetClientIpAddress(httpContext);
-            var userAgent = httpContext.Request.Headers["User-Agent"].ToString();
-            var httpMethod = httpContext.Request.Method;
-            var endPointName = context.ActionDescriptor.DisplayName;
-            var requestedUrl = httpContext.Request.Path + httpContext.Request.QueryString;
-
+            
             Task.Run(() =>
             {
                 var dbContext = new KitContext();
@@ -63,18 +50,17 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 using (HttpClient client = new HttpClient())
                 {
-                    var response = await client.GetAsync("http://localhost:3100/igdl?url=" + link);
-                    var responseString = await response.Content.ReadAsStringAsync();
-                    var result = JsonConvert.DeserializeObject<InstagramResponse>(responseString)!;
+                    var snapSaveResponse = await client.GetAsync("http://localhost:3100/igdl?url=" + link);
+                    var snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
+                    var instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
-                    contentUrl=result.url.data.FirstOrDefault()?.url ?? string.Empty;
-                    thumbnailUrl=result.url.data.FirstOrDefault()?.thumbnail ?? string.Empty;
+                    contentUrl=instagramResponse.url.data.FirstOrDefault()?.url ?? string.Empty;
+                    thumbnailUrl=instagramResponse.url.data.FirstOrDefault()?.thumbnail ?? string.Empty;
 
-                    var request = new HttpRequestMessage(HttpMethod.Get, contentUrl);
-                    //request.Headers.Range = new RangeHeaderValue(0, 1023);
-                    var contentTypeResponse = await client.SendAsync(request);
+                    var contentDispositionHeadRequest = new HttpRequestMessage(HttpMethod.Get, contentUrl);
+                    var contentDispositionHeadResponse = await client.SendAsync(contentDispositionHeadRequest);
                     
-                    var contentDisposition = contentTypeResponse.Content.Headers.ContentDisposition;
+                    var contentDisposition = contentDispositionHeadResponse.Content.Headers.ContentDisposition;
                     bool isPhoto = contentDisposition != null && contentDisposition.FileName != null && !contentDisposition.FileName.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase);
 
                     if (isPhoto)
@@ -87,13 +73,12 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 string[] data = { contentUrl, thumbnailUrl, link };
                 ViewBag.IsPhoto = false;
-                 return View(data);
+                return View(data);
             }
 
             catch (Exception e)
             {
                 return View("Error");
-
             }
         }
 
