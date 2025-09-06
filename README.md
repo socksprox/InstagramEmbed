@@ -2,7 +2,7 @@
 
 **InstagramEmbed** is a lightweight Instagram link embedding tool designed for Discord and other platforms supporting the [Open Graph Protocol (OGP)](https://ogp.me/). It offers full support for embedding Instagram photos and videos, enabling seamless previews across chats, forums, and websites.
 
-Unlike traditional solutions that rely on limited scraping techniques, InstagramEmbed leverages the [SnapSave API](https://github.com/milancodess/Instagram-Video-Downloader-API) for robust and consistent content retrieval—ensuring compatibility with the majority of public Instagram media.
+Unlike traditional solutions that rely on limited scraping techniques, InstagramEmbed leverages the [Snapsave Media Downloader](https://github.com/ahmedrangel/snapsave-media-downloader) for robust and consistent content retrieval—ensuring compatibility with the majority of public Instagram media.
 
 ## Features
 
@@ -24,14 +24,14 @@ Unlike traditional solutions that rely on limited scraping techniques, Instagram
 
 InstagramEmbed uses this backend API for fetching Instagram content:
 
-**Instagram Video Downloader API by [@milancodess](https://github.com/milancodess)**  
-🔗 https://github.com/milancodess/Instagram-Video-Downloader-API
+**Snapsave Media Downloader [ahmedrangel](https://github.com/ahmedrangel)**  
+🔗 https://github.com/ahmedrangel/snapsave-media-downloader
 
 ---
 
 ## Credits
 
-- [SnapSave API by Milan Bhandari](https://github.com/milancodess/Instagram-Video-Downloader-API)
+- [Snapsave Media Downloader by Ahmed Rangel](https://github.com/ahmedrangel/snapsave-media-downloader)
 - UI & backend by [Lainmode](https://github.com/Lainmode)
 - Twitter: [@realAlita](https://twitter.com/realAlita)
 
