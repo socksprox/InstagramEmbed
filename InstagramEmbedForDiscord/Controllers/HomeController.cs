@@ -16,7 +16,7 @@ using System.Text.RegularExpressions;
 
 namespace InstagramEmbedForDiscord.Controllers
 {
-    [Route("{type}/{id}/{index?}/{index2?}")]
+    [Route("{type}/{id}/{index?}")]
     public class HomeController : Controller
     {
         private readonly ILogger<HomeController> _logger;
@@ -45,7 +45,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
         }
 
-        public async Task<IActionResult> Index(string type, string id, string? index, string? index2)
+        public async Task<IActionResult> Index(string type, string id, string? index)
         {
             //try
             //{
@@ -60,7 +60,7 @@ namespace InstagramEmbedForDiscord.Controllers
                 string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
                 InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
-                ViewBag.PostDetails = await GetPostDetails(client, id);
+                //ViewBag.PostDetails = await GetPostDetails(client, id);
 
                 var media = instagramResponse.url?.data?.media;
                 if (media == null || media.Count <= 0)
