@@ -12,10 +12,11 @@ using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 
 namespace InstagramEmbedForDiscord.Controllers
 {
-    [Route("{type}/{id}/{index?}")]
+    [Route("{type}/{id}/{index?}/{index2?}")]
     public class HomeController : Controller
     {
         private readonly ILogger<HomeController> _logger;
@@ -44,27 +45,29 @@ namespace InstagramEmbedForDiscord.Controllers
 
         }
 
-        public async Task<IActionResult> Index(string type, string id, string? index)
+        public async Task<IActionResult> Index(string type, string id, string? index, string? index2)
         {
             //try
             //{
-                string link = "https://instagram.com/p/" + id;
+            string link = "https://instagram.com/p/" + id;
 
-                string contentUrl = string.Empty;
-                string thumbnailUrl = string.Empty;
+            string contentUrl = string.Empty;
+            string thumbnailUrl = string.Empty;
 
-                using (HttpClient client = new HttpClient())
-                {
-                    HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link + "/");
-                    string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
-                    InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
+            using (HttpClient client = new HttpClient())
+            {
+                HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link + "/");
+                string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
+                InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
-                    var media = instagramResponse.url?.data?.media;
-                    if (media==null || media.Count<=0)
-                        return BadRequest("No media found.");
+                ViewBag.PostDetails = await GetPostDetails(client, id);
+
+                var media = instagramResponse.url?.data?.media;
+                if (media == null || media.Count <= 0)
+                    return BadRequest("No media found.");
 
                 if (media.Count == 1) return await ProcessSingleItem(media.First(), client, link);
-                else if (index != null && int.TryParse(index, out int intIndex) && media.Count>=intIndex) return await ProcessSingleItem(media[intIndex<=0?0:intIndex-1], client, link);
+                else if (index != null && int.TryParse(index, out int intIndex) && media.Count >= intIndex) return await ProcessSingleItem(media[intIndex <= 0 ? 0 : intIndex - 1], client, link);
                 else return await ProcessMultipleItems(media, link, id);
             }
             //}
@@ -80,6 +83,38 @@ namespace InstagramEmbedForDiscord.Controllers
         public IActionResult HomePage()
         {
             return View();
+        }
+
+        private async Task<InstagramPostDetails> GetPostDetails(HttpClient client, string id)
+        {
+            try
+            {
+                var embedUrl = $"https://www.instagram.com/p/{id}/embed/captioned/";
+
+                var html = await client.GetStringAsync(embedUrl);
+
+                var usernameMatch = Regex.Match(html, @"<span class=""UsernameText"">(.*?)</span>");
+                string? username = usernameMatch.Success ? usernameMatch.Groups[1].Value : null;
+
+                var likesMatch = Regex.Match(html, @"(\d[\d,\.]*) likes");
+                string? likes = likesMatch.Success ? likesMatch.Groups[1].Value : null;
+
+                var imgMatch = Regex.Match(html, @"<a class=""Avatar InsideRing"".*?<img src=""(.*?)""", RegexOptions.Singleline);
+                string? profileImg = imgMatch.Success ? imgMatch.Groups[1].Value : null;
+
+                return new InstagramPostDetails
+                {
+                    Username = username,
+                    Avatar = profileImg,
+                    Likes = likes
+                };
+            }
+            catch
+            {
+                return new InstagramPostDetails();
+            }
+           
+           
         }
 
         private async Task<IActionResult> ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink) 
@@ -344,6 +379,13 @@ namespace InstagramEmbedForDiscord.Controllers
     public class InstagramResponse
     {
         public InstagramUrl url { get; set; } = new();
+    }
+
+    public class InstagramPostDetails
+    {
+        public string? Username { get; set; } = string.Empty;
+        public string? Avatar { get; set; } = string.Empty;
+        public string? Likes { get; set; } = string.Empty;
     }
 
 }
