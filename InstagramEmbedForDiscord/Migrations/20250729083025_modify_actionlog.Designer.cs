@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace InstagramEmbedForDiscord.Migrations
 {
-    [DbContext(typeof(KitContext))]
+    [DbContext(typeof(IGContext))]
     [Migration("20250729083025_modify_actionlog")]
     partial class modify_actionlog
     {

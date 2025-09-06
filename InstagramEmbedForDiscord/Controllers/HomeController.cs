@@ -34,7 +34,7 @@ namespace InstagramEmbedForDiscord.Controllers
             
             Task.Run(() =>
             {
-                var dbContext = new KitContext();
+                var dbContext = new IGContext();
 
                 var log = ActionLog.CreateActionLog(httpContext);
 

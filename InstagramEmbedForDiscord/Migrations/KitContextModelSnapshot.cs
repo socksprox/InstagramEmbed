@@ -10,7 +10,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 namespace InstagramEmbedForDiscord.Migrations
 {
-    [DbContext(typeof(KitContext))]
+    [DbContext(typeof(IGContext))]
     partial class KitContextModelSnapshot : ModelSnapshot
     {
         protected override void BuildModel(ModelBuilder modelBuilder)

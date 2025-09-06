@@ -6,7 +6,7 @@
 
     public class IGContext : DbContext
     {
-        private readonly string connectionString = "Server=107.175.187.215;Database=igembed;TrustServerCertificate=True;User Id=admin;password=uDFEGFyfHIqY!";
+        private readonly string connectionString = "";
         public DbSet<ActionLog> ActionLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
