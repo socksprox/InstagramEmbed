@@ -10,7 +10,7 @@
     string postId = ViewBag.PostID;
     int order = ViewBag.Order ?? 1;
 
-    var baseUrl = $"{Context.Request.Scheme}://{Context.Request.Host}";
+    var baseUrl = $"https://{Context.Request.Host}";
 
 
     if(contentUrl.Contains("rapidcdn"))
@@ -49,10 +49,10 @@
 
     }
 
-    <meta property="og:site_name" content="vxinstagram" />
-    <meta property="theme-color" content="#c0c0ff" />
-    <meta property="twitter:title" content="@postDetails?.Username" />
-
+@*     <meta property="og:site_name" content="vxinstagram" />
+ *@    <meta property="theme-color" content="#c0c0ff" />
+@*     <meta property="twitter:title" content="@postDetails?.Username" />
+ *@
     <link rel="canonical" href="@url" />
     <meta property="og:url" content="@url" />
 
