@@ -3,6 +3,7 @@ using InstagramEmbedForDiscord.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Newtonsoft.Json;
 using SkiaSharp;
 using System;
@@ -47,42 +48,72 @@ namespace InstagramEmbedForDiscord.Controllers
 
         public async Task<IActionResult> Index(string type, string id, string? index)
         {
-            //try
-            //{
-            string link = "https://instagram.com/p/" + id;
-
-            string contentUrl = string.Empty;
-            string thumbnailUrl = string.Empty;
-
-            using (HttpClient client = new HttpClient())
+            try
             {
-                HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link + "/");
-                string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
-                InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
+                string link = "https://instagram.com/p/" + id;
 
-                //ViewBag.PostDetails = await GetPostDetails(client, id);
+                string contentUrl = string.Empty;
+                string thumbnailUrl = string.Empty;
 
-                var media = instagramResponse.url?.data?.media;
-                if (media == null || media.Count <= 0)
-                    return BadRequest("No media found.");
+                using (HttpClient client = new HttpClient())
+                {
+                    var instagramResponse = await GetSnapsaveResponse(link, client);
 
-                if (media.Count == 1) return await ProcessSingleItem(media.First(), client, link);
-                else if (index != null && int.TryParse(index, out int intIndex) && media.Count >= intIndex) return await ProcessSingleItem(media[intIndex <= 0 ? 0 : intIndex - 1], client, link);
-                else return await ProcessMultipleItems(media, link, id);
+                    //ViewBag.PostDetails = await GetPostDetails(client, id);
+
+                    var media = instagramResponse.url?.data?.media;
+                    if (media == null || media.Count <= 0)
+                        return BadRequest("No media found.");
+
+                    if (media.Count == 1) return ProcessSingleItem(media.First(), client, link);
+                    else if (index != null && int.TryParse(index, out int intIndex) && media.Count >= intIndex) return ProcessSingleItem(media[intIndex <= 0 ? 0 : intIndex - 1], client, link);
+                    else return await ProcessMultipleItems(media, link, id);
+                }
+
+
             }
-            //}
 
-            //catch (Exception e)
-            //{
-            //    Console.WriteLine(e.Message);
-            //    return View("Error");
-            //}
+            catch (Exception e)
+            {
+                Console.WriteLine(e.Message);
+                return View("Error");
+            }
         }
+
 
         [Route("/")]
         public IActionResult HomePage()
         {
             return View();
+        }
+
+        [Route("/generated/{fileName}")]
+        public async Task<IActionResult> Generated(string fileName)
+        {
+            string folderPath = Path.Combine(_env.WebRootPath, "generated");
+            string filePath = Path.Combine(folderPath, fileName);
+
+            if (!System.IO.File.Exists(filePath))
+            {
+                var postId = Path.GetFileNameWithoutExtension(fileName);
+                using(HttpClient client = new HttpClient())
+                {
+                    var instagramResponse = await GetSnapsaveResponse("https://instagram.com/p/" + postId, client);
+                    if (instagramResponse.url?.data?.media == null || instagramResponse.url.data.media.Count == 0)
+                        return NotFound();
+
+                    var newFileName = await GetGeneratedFile(instagramResponse.url?.data?.media ?? new List<InstagramMedia>(), postId);
+                    if (newFileName == null) return NotFound();
+
+                    string newFilePath = Path.Combine(folderPath, newFileName);
+
+                    var newImageBytes = System.IO.File.ReadAllBytes(filePath);
+                    return File(newImageBytes, "image/jpeg");
+                }
+            }
+
+            var imageBytes = System.IO.File.ReadAllBytes(filePath);
+            return File(imageBytes, "image/jpeg");
         }
 
         private async Task<InstagramPostDetails> GetPostDetails(HttpClient client, string id)
@@ -117,7 +148,18 @@ namespace InstagramEmbedForDiscord.Controllers
            
         }
 
-        private async Task<IActionResult> ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink) 
+        private async Task<InstagramResponse> GetSnapsaveResponse(string link, HttpClient client)
+        {
+         
+            HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link + "/");
+            string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
+            InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
+
+            return instagramResponse;
+            
+        }
+
+        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink) 
         {
             var contentUrl = media.url;
             var thumbnailUrl = media.thumbnail;
@@ -126,7 +168,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
             if (isPhoto)
             {
-                var imageBytes = await client.GetByteArrayAsync(contentUrl);
+                //var imageBytes = await client.GetByteArrayAsync(contentUrl);
 
                 ViewBag.IsPhoto = true;
                 ViewBag.Files = new List<InstagramMedia>() { media };
@@ -143,10 +185,24 @@ namespace InstagramEmbedForDiscord.Controllers
 
         private async Task<IActionResult> ProcessMultipleItems(List<InstagramMedia> media, string originalLink, string id)
         {
+
+            string? fileName = await GetGeneratedFile(media, id);
+
+            if (fileName == null) return BadRequest("Could not process images.");
+
+            string contentUrl = $"https://{Request.Host}/generated/{fileName}";
+
+            ViewBag.IsPhoto = true;
+            ViewBag.Files = media;
+            return View(new string[] { contentUrl, null, originalLink });
+        }
+
+        private async Task<string?> GetGeneratedFile(List<InstagramMedia> media, string id)
+        {
             List<SKBitmap> bitmaps = await GetMultipleImages(media.Take(16).ToList());
 
             if (bitmaps.Count == 0)
-                return BadRequest("No images to process.");
+                return null;
 
             int columns = media.Count <= 5 ? 2 : media.Count <= 9 ? 3 : media.Count <= 16 ? 4 : 0;
             int rows = (int)Math.Ceiling((double)bitmaps.Count / columns);
@@ -181,7 +237,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
             using var finalBitmap = new SKBitmap(canvasWidth, canvasHeight);
             using var canvas = new SKCanvas(finalBitmap);
-            canvas.Clear(GetAverageColor(bitmaps)); 
+            canvas.Clear(GetAverageColor(bitmaps));
 
             int yOffset = 0;
 
@@ -196,9 +252,9 @@ namespace InstagramEmbedForDiscord.Controllers
                     float offsetY = yOffset + (rowHeight - img.Height) / 2f;
                     float offsetX = xOffset;
 
-                    if(row.IndexOf(img) == row.Count-1)
+                    if (row.IndexOf(img) == row.Count - 1)
                     {
-                        var remainingWidth = canvasWidth - (row.Sum(e => e.Width)-img.Width);
+                        var remainingWidth = canvasWidth - (row.Sum(e => e.Width) - img.Width);
                         offsetX = (offsetX + remainingWidth - img.Width);
                     }
 
@@ -230,12 +286,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     data.SaveTo(stream);
                 }
             }
-
-            string contentUrl = $"https://{Request.Host}/generated/{fileName}";
-
-            ViewBag.IsPhoto = true;
-            ViewBag.Files = media;
-            return View(new string[] { contentUrl, null, originalLink });
+            return fileName;
         }
 
 
