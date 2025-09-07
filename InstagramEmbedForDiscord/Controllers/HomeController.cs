@@ -52,8 +52,8 @@ namespace InstagramEmbedForDiscord.Controllers
             {
                 string link = "https://instagram.com/p/" + id;
 
-                string contentUrl = string.Empty;
-                string thumbnailUrl = string.Empty;
+                ViewBag.PostId = id;
+                ViewBag.Order = index!= null ? int.TryParse(index, out int orderindex) ? (orderindex <= 0 ? 1 : orderindex) : 1 : 1;
 
                 using (HttpClient client = new HttpClient())
                 {
@@ -114,6 +114,28 @@ namespace InstagramEmbedForDiscord.Controllers
 
             var imageBytes = System.IO.File.ReadAllBytes(filePath);
             return File(imageBytes, "image/jpeg");
+        }
+
+        [Route("/VerifySnapsaveLink")]
+        public async Task<IActionResult> VerifySnapsaveLink(string rapidsaveUrl,string postId, int? order)
+        {
+            order = order != null ? order - 1 : 0;
+            order = order < 0 ? 0 : order;
+
+            using (HttpClient client = new HttpClient())
+            {
+                var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl));
+
+                if(response.IsSuccessStatusCode)
+                {
+                    return Redirect(rapidsaveUrl);
+                }
+
+                var instagramResponse = await GetSnapsaveResponse("https://instagram.com/p/" + postId + "/", client);
+                var media = instagramResponse.url?.data?.media[order.Value];
+
+                return Redirect(media!.url);
+            }
         }
 
         private async Task<InstagramPostDetails> GetPostDetails(HttpClient client, string id)

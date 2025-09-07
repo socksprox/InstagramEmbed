@@ -6,6 +6,18 @@
     string thumbnailUrl = Model[1];
     string url = Model[2];
     bool isPhoto = ViewBag.IsPhoto;
+
+    string postId = ViewBag.PostID;
+    int order = ViewBag.Order ?? 1;
+
+    var baseUrl = $"{Context.Request.Scheme}://{Context.Request.Host}";
+
+
+    if(contentUrl.Contains("rapidcdn"))
+    {
+        contentUrl = $"{baseUrl}/VerifySnapsaveLink?postid={postId}&order={order}&rapidsaveUrl={contentUrl}";
+    }
+
     // int width = ViewBag.Width ?? 0;
     // int height = ViewBag.Height ?? 0;
 
@@ -65,25 +77,26 @@
     <div class="row g-5 align-items-center w-100 justify-content-center mx-auto  p-4">
         @foreach (var item in files)
         {
+            var contentUrlForItem = $"{baseUrl}/VerifySnapsaveLink?postid={postId}&order={files.IndexOf(item)+1}&rapidsaveUrl={item.url}";
             <div class="col-12 col-md-6 col-lg-4">
             <div class="card-body my-auto shadow px-0 py-0 bg-dark text-light border border-secondary pb-3" style="height:fit-content;flex:0;border-radius:1rem">
                 <div class="media-container w-100">
                     @if (item.type == "video")
                     {
                         <video class="post-media w-100" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" controls>
-                            <source src="@item.url}" type="video/mp4">
+                                <source src="@contentUrlForItem" type="video/mp4">
                 Your browser does not support the video tag.
                         </video>
                     }
                     else
                     {
-                        <img src="@item.url" class="w-100" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" />
+                            <img src="@contentUrlForItem" class="w-100" style="aspect-ratio:5/6; object-fit:cover;  border-top-left-radius: 1rem; border-top-right-radius:1rem;" />
                     }
                 </div>
         <div class="content">
             <div class="d-flex flex-column p-3 pb-0 gap-2">
                 <button class="btn btn-success"
-                        onclick="window.location.href='@item.url'">
+                        onclick="window.location.href='@contentUrlForItem'">
                     Download
                 </button>
                 <button class="btn btn-primary"
