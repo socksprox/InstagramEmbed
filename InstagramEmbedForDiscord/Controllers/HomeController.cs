@@ -327,7 +327,7 @@ namespace InstagramEmbedForDiscord.Controllers
         private async Task<InstagramResponse> GetSnapsaveResponse(string link, HttpClient client)
         {
          
-            HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link + "/");
+            HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link);
             string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
             InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
