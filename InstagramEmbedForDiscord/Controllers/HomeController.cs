@@ -20,7 +20,6 @@ using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 
 namespace InstagramEmbedForDiscord.Controllers
 {
-    [Route("{type}/{id}/{index?}")]
     public class HomeController : Controller
     {
         private readonly ILogger<HomeController> _logger;
@@ -49,45 +48,86 @@ namespace InstagramEmbedForDiscord.Controllers
 
         }
 
-        public async Task<IActionResult> Index(string type, string id, string? index)
+        [Route("{**path}")]
+        public async Task<IActionResult> Index(string path, [FromQuery(Name = "img_index")] int? imgIndex)
         {
             try
             {
-                string link = "https://instagram.com/p/" + id;
+                if (string.IsNullOrWhiteSpace(path))
+                    return BadRequest("Invalid Instagram path.");
+
+                var segments = path.Trim('/').Split('/');
+
+                int orderIndex = 1;
+                string? lastSegment = segments.LastOrDefault();
+
+                if (int.TryParse(lastSegment, out int parsedIndex))
+                {
+                    orderIndex = parsedIndex <= 0 ? 1 : parsedIndex;
+                    segments = segments.Take(segments.Length - 1).ToArray();
+                }
+                else if (imgIndex.HasValue)
+                {
+                    orderIndex = imgIndex.Value <= 0 ? 1 : imgIndex.Value;
+                }
+
+                string? id = segments.LastOrDefault();                // hash
+                string? type = segments.Length > 1 ? segments[^2] : segments.FirstOrDefault(); // p, reel, etc.
+                string? username = segments.Length > 2 ? segments[0] : null;
+
+                if (username?.ToLower() == "stories")
+                {
+                    username = type;
+                    type = $"stories/{username}";
+                }
+
+                // Rebuild link
+                string link = $"https://instagram.com/{type}/{id}/";
+
 
                 ViewBag.PostId = id;
-                ViewBag.Order = index!= null ? int.TryParse(index, out int orderindex) ? (orderindex <= 0 ? 1 : orderindex) : 1 : 1;
+                ViewBag.Order = orderIndex;
 
                 using (HttpClient client = new HttpClient())
                 {
                     client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Mozilla", "5.0"));
 
+                    // Fetch SnapSave/Instagram API response
                     var instagramResponse = await GetSnapsaveResponse(link, client);
+                    var media = instagramResponse.url?.data?.media;
 
-                    if (Request.Host.Value.Equals("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase) ||
-                        Request.Host.Value.Equals("www.d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
+                    // Only fetch PostDetails if host matches d.vxinstagram.com
+                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
                     {
                         ViewBag.PostDetails = await GetPostDetails(client, id);
                     }
-                    
-                    var media = instagramResponse.url?.data?.media;
-                    if (media == null || media.Count <= 0)
+
+                    if (media == null || media.Count == 0)
                         return BadRequest("No media found.");
 
-                    if (media.Count == 1) return ProcessSingleItem(media.First(), client, link);
-                    else if (index != null && int.TryParse(index, out int intIndex) && media.Count >= intIndex) return ProcessSingleItem(media[intIndex <= 0 ? 0 : intIndex - 1], client, link);
-                    else return await ProcessMultipleItems(media, link, id);
+                    // Limit media to max 16 items
+                    media = media.Take(16).ToList();
+
+                    if (media.Count == 1)
+                    {
+                        return ProcessSingleItem(media.First(), client, link);
+                    }
+
+                    // Use orderIndex if valid
+                    if (orderIndex > 0 && orderIndex <= media.Count)
+                        return ProcessSingleItem(media[orderIndex - 1], client, link);
+
+                    // Otherwise, return multiple items
+                    return await ProcessMultipleItems(media, link, id);
                 }
-
-
             }
-
-            catch (Exception e)
+            catch (Exception ex)
             {
-                Console.WriteLine(e.Message);
+                Console.WriteLine(ex.Message); // Replace with ILogger in production
                 return View("Error");
             }
         }
+
 
 
         [Route("/")]
