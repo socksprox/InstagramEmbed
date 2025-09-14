@@ -58,7 +58,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 var segments = path.Trim('/').Split('/');
 
-                int orderIndex = 1;
+                int orderIndex = -1;
                 string? lastSegment = segments.LastOrDefault();
 
                 if (int.TryParse(lastSegment, out int parsedIndex))
