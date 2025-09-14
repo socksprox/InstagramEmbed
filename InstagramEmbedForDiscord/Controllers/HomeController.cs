@@ -97,7 +97,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     var media = instagramResponse.url?.data?.media;
 
                     // Only fetch PostDetails if host matches d.vxinstagram.com
-                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
+                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase) || true)
                     {
                         ViewBag.PostDetails = await GetPostDetails(client, id);
                     }
@@ -285,7 +285,11 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 // 🆕 Extract description
                 string? description = null;
-                var captionMatch = Regex.Match(html, @"<div class=""Caption"">(.*?)<div class=""CaptionComments""", RegexOptions.Singleline);
+                var captionMatch = Regex.Match(
+                    html,
+                    @"<div class=""Caption"">(.*?)(<div class=""CaptionComments"">|</div>)",
+                    RegexOptions.Singleline
+                );
                 if (captionMatch.Success)
                 {
                     var rawCaptionHtml = captionMatch.Groups[1].Value;
