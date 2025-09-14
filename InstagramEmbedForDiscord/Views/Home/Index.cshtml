@@ -36,9 +36,13 @@
         <meta property="og:image" content="@contentUrl" />
         <meta name="twitter:card" content="summary_large_image">
         <meta name="twitter:image" content="@contentUrl" />
-        <meta property="og:description"
-              content="Reporters talking with everyone who has ever met the shooter asking if the shooter knew any trans people. Healthy society we have here for sure.">
-     }
+
+        @if(postDetails!=null)
+        {
+            <meta property="og:description"
+                  content="@postDetails.Description">
+        }
+  }
     else
     {
         <meta property="og:type" content="video.other" />

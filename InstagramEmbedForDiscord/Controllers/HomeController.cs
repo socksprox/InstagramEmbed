@@ -64,7 +64,11 @@ namespace InstagramEmbedForDiscord.Controllers
 
                     var instagramResponse = await GetSnapsaveResponse(link, client);
 
-                    ViewBag.PostDetails = await GetPostDetails(client, id);
+                    if (Request.Host.Value.Equals("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase) ||
+                        Request.Host.Value.Equals("www.d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ViewBag.PostDetails = await GetPostDetails(client, id);
+                    }
                     
                     var media = instagramResponse.url?.data?.media;
                     if (media == null || media.Count <= 0)
