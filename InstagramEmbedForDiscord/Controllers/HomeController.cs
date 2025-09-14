@@ -75,10 +75,16 @@ namespace InstagramEmbedForDiscord.Controllers
                 string? type = segments.Length > 1 ? segments[^2] : segments.FirstOrDefault(); // p, reel, etc.
                 string? username = segments.Length > 2 ? segments[0] : null;
 
+
                 if (username?.ToLower() == "stories")
                 {
                     username = type;
                     type = $"stories/{username}";
+                }
+
+                else if(username?.ToLower() == "share")
+                {
+                    type = $"share/{type}";
                 }
 
                 // Rebuild link
