@@ -97,7 +97,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     var media = instagramResponse.url?.data?.media;
 
                     // Only fetch PostDetails if host matches d.vxinstagram.com
-                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase) || true)
+                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
                     {
                         ViewBag.PostDetails = await GetPostDetails(client, id);
                     }
