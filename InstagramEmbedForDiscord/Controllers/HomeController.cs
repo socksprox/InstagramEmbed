@@ -1,9 +1,10 @@
-using InstagramEmbedForDiscord.DAL;
+﻿using InstagramEmbedForDiscord.DAL;
 using InstagramEmbedForDiscord.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
+using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using SkiaSharp;
 using System;
@@ -12,8 +13,10 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Claims;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using static Microsoft.EntityFrameworkCore.DbLoggerCategory;
 
 namespace InstagramEmbedForDiscord.Controllers
 {
@@ -57,10 +60,12 @@ namespace InstagramEmbedForDiscord.Controllers
 
                 using (HttpClient client = new HttpClient())
                 {
+                    client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Mozilla", "5.0"));
+
                     var instagramResponse = await GetSnapsaveResponse(link, client);
 
-                    //ViewBag.PostDetails = await GetPostDetails(client, id);
-
+                    ViewBag.PostDetails = await GetPostDetails(client, id);
+                    
                     var media = instagramResponse.url?.data?.media;
                     if (media == null || media.Count <= 0)
                         return BadRequest("No media found.");
@@ -138,37 +143,132 @@ namespace InstagramEmbedForDiscord.Controllers
             }
         }
 
+        [Route("/oembed")]
+        public IActionResult OEmbed(string username, string? desc)
+        {
+            return Json(new OEmbedModel()
+            {
+                author_name = desc!=null? !desc.IsNullOrEmpty()?desc: $"@{username}": $"@{username}",
+                author_url = "https://instagram.com/" + username,
+                provider_name = "vxinstagram",
+                provider_url = "https://github.com/Lainmode/InstagramEmbed-vxinstagram",
+                title = "",
+                type = "video",
+                version = "1.0"
+            });
+        }
+
+
+        [Route("/users/username/statuses/7523033599046667550")]
+        public IActionResult Activity(string link, string username, string avatar, string likes, string mediaType, string postId)
+        {
+            Response.Headers.Remove("X-Robots-Tag");
+            return Content("{\"id\":\"7523033599046667550\",\"url\":\"https://tiktok.com/@www.cherryfairy.com/video/7523033599046667550\",\"uri\":\"https://tiktok.com/@www.cherryfairy.com/video/7523033599046667550\",\"created_at\":\"2025-07-04T01:32:52.000Z\",\"content\":\"<b>❤️6.0M💬3.7k🔁141.6k</b>\",\"spoiler_text\":\"\",\"language\":null,\"visibility\":\"public\",\"application\":{\"name\":\"fxTikTok\",\"website\":\"https://github.com/okdargy/fxTikTok\"},\"media_attachments\":[{\"id\":\"7523033599046667550-video\",\"type\":\"video\",\"url\":\"https://offload.tnktok.com/generate/video/7523033599046667550\",\"preview_url\":\"https://offload.tnktok.com/generate/cover/7523033599046667550\",\"remote_url\":null,\"preview_remote_url\":null,\"text_url\":null,\"description\":null,\"meta\":{\"original\":{\"width\":576,\"height\":1024}}}],\"account\":{\"id\":\"www.cherryfairy.com\",\"display_name\":\"Cherryfairy\",\"username\":\"www.cherryfairy.com\",\"acct\":\"www.cherryfairy.com\",\"url\":\"https://tiktok.com/@www.cherryfairy.com\",\"created_at\":\"2022-06-20T20:29:27.000Z\",\"locked\":false,\"bot\":false,\"discoverable\":true,\"indexable\":false,\"group\":false,\"avatar\":\"https://offload.tnktok.com/generate/pfp/www.cherryfairy.com\",\"avatar_static\":\"https://offload.tnktok.com/generate/pfp/www.cherryfairy.com\",\"header\":null,\"header_static\":null,\"statuses_count\":0,\"hide_collections\":false,\"noindex\":false,\"emojis\":[],\"roles\":[],\"fields\":[]},\"mentions\":[],\"tags\":[],\"emojis\":[],\"card\":null,\"poll\":null}", "application/activity+json; charset=utf-8");
+            var model = new ActivityPubModel()
+            {
+                account = new Account()
+                {
+                    id = username,
+                    display_name = username,
+                    username = username,
+                    url = "https://instagram.com/" + username,
+                    avatar = "https://offload.tnktok.com/generate/pfp/www.cherryfairy.com",
+                    avatar_static = "https://offload.tnktok.com/generate/pfp/www.cherryfairy.com",
+                    created_at = DateTime.UtcNow,
+                    acct = username,
+                    
+                },
+                media_attachments = new List<MediaAttachment>()
+                {
+                    new MediaAttachment()
+                    {
+                        id=postId,
+                        type = mediaType,
+                        url = link,
+                        preview_url = link,
+                        meta = new Meta()
+                        {
+                            original = new Original()
+                            {
+                                width = 576,
+                                height = 1024
+                            }
+                        }
+                    }
+                },
+                content = $"<b>❤️ {likes}</b>",
+                id = postId,
+                url = "www.instagram.com/p/" + postId + "/",
+                application = new Application()
+                {
+                    name = "vxinstagram",
+                    website = "https://github.com/Lainmode/InstagramEmbed-vxinstagram"
+                },
+                created_at = DateTime.UtcNow,
+                visibility = "public",
+                uri = "www.instagram.com/p/" + postId + "/"
+
+            };
+
+            var options = new JsonSerializerOptions
+            {
+                Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+                WriteIndented = true
+            };
+
+            string json = System.Text.Json.JsonSerializer.Serialize(model, options);
+            return Content(json, "application/json");
+        }
+
         private async Task<InstagramPostDetails> GetPostDetails(HttpClient client, string id)
         {
             try
             {
                 var embedUrl = $"https://www.instagram.com/p/{id}/embed/captioned/";
-
                 var html = await client.GetStringAsync(embedUrl);
 
+                // Username
                 var usernameMatch = Regex.Match(html, @"<span class=""UsernameText"">(.*?)</span>");
                 string? username = usernameMatch.Success ? usernameMatch.Groups[1].Value : null;
 
+                // Likes
                 var likesMatch = Regex.Match(html, @"(\d[\d,\.]*) likes");
                 string? likes = likesMatch.Success ? likesMatch.Groups[1].Value : null;
 
+                // Profile avatar
                 var imgMatch = Regex.Match(html, @"<a class=""Avatar InsideRing"".*?<img src=""(.*?)""", RegexOptions.Singleline);
                 string? profileImg = imgMatch.Success ? imgMatch.Groups[1].Value : null;
+
+                // 🆕 Extract description
+                string? description = null;
+                var captionMatch = Regex.Match(html, @"<div class=""Caption"">(.*?)<div class=""CaptionComments""", RegexOptions.Singleline);
+                if (captionMatch.Success)
+                {
+                    var rawCaptionHtml = captionMatch.Groups[1].Value;
+
+                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<a class=""CaptionUsername"".*?</a>", "", RegexOptions.Singleline);
+
+                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<br\s*/?>", "\n");
+
+                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<.*?>", "");
+
+                    description = System.Net.WebUtility.HtmlDecode(rawCaptionHtml).Trim();
+                }
 
                 return new InstagramPostDetails
                 {
                     Username = username,
                     Avatar = profileImg,
-                    Likes = likes
+                    Likes = likes,
+                    Description = description
                 };
             }
             catch
             {
                 return new InstagramPostDetails();
             }
-           
-           
         }
+
 
         private async Task<InstagramResponse> GetSnapsaveResponse(string link, HttpClient client)
         {
@@ -459,6 +559,99 @@ namespace InstagramEmbedForDiscord.Controllers
         public string? Username { get; set; } = string.Empty;
         public string? Avatar { get; set; } = string.Empty;
         public string? Likes { get; set; } = string.Empty;
+        public string? Description { get; set; } = string.Empty;
     }
+
+
+
+
+    public class OEmbedModel
+    {
+        public string version { get; set; }
+        public string type { get; set; }
+        public string author_name { get; set; }
+        public string author_url { get; set; }
+        public string provider_name { get; set; }
+        public string provider_url { get; set; }
+        public string title { get; set; }
+    }
+    // Root myDeserializedClass = JsonConvert.DeserializeObject<Root>(myJsonResponse);
+    public class Account
+    {
+        public string id { get; set; }
+        public string display_name { get; set; }
+        public string username { get; set; }
+        public string acct { get; set; }
+        public string url { get; set; }
+        public DateTime created_at { get; set; }
+        public bool locked { get; set; }
+        public bool bot { get; set; }
+        public bool discoverable { get; set; }
+        public bool indexable { get; set; }
+        public bool group { get; set; }
+        public string avatar { get; set; }
+        public string avatar_static { get; set; }
+        public object header { get; set; }
+        public object header_static { get; set; }
+        public int statuses_count { get; set; }
+        public bool hide_collections { get; set; }
+        public bool noindex { get; set; }
+        public List<object> emojis { get; set; } = new List<object>();
+        public List<object> roles { get; set; } = new List<object>();
+        public List<object> fields { get; set; } = new List<object>();
+    }
+
+    public class Application
+    {
+        public string name { get; set; }
+        public string website { get; set; }
+    }
+
+    public class MediaAttachment
+    {
+        public string id { get; set; }
+        public string type { get; set; }
+        public string url { get; set; }
+        public string preview_url { get; set; }
+        public object remote_url { get; set; }
+        public object preview_remote_url { get; set; }
+        public object text_url { get; set; }
+        public object description { get; set; }
+        public Meta meta { get; set; }
+    }
+
+    public class Meta
+    {
+        public Original original { get; set; }
+    }
+
+    public class Original
+    {
+        public int width { get; set; }
+        public int height { get; set; }
+    }
+
+    public class ActivityPubModel
+    {
+        public string id { get; set; }
+        public string url { get; set; }
+        public string uri { get; set; }
+        public DateTime created_at { get; set; }
+        public string content { get; set; }
+        public string spoiler_text { get; set; }
+        public object language { get; set; }
+        public string visibility { get; set; }
+        public Application application { get; set; }
+        public List<MediaAttachment> media_attachments { get; set; }
+        public Account account { get; set; }
+        public List<object> mentions { get; set; }
+        public List<object> tags { get; set; }
+        public List<object> emojis { get; set; }
+        public object card { get; set; }
+        public object poll { get; set; }
+    }
+
+
+
 
 }
