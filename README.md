@@ -22,6 +22,8 @@ Unlike traditional solutions that rely on limited scraping techniques, Instagram
 - ✅ With or Without Post Details (vxinstagram.com / d.vxinstagram.com).
 - ❌ User information, list of reels, list of posts, tags, and search queries.
 
+For more information, visit [vxinstagram.com](https://vxinstagram.com)
+
 ## How It Works
 
 1. User pastes an Instagram link with "vx" at the beginning (vxinstagram) (e.g., into Discord).
