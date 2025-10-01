@@ -10,15 +10,25 @@ Unlike traditional solutions that rely on limited scraping techniques, Instagram
 - Powered by the reliable SnapSave API
 - Fast response 
 
----
+## Supports
+
+- ✅ Posts (www.instagram.com/p).
+- ✅ Reels (www.instagram.com/reel(s)).
+- ✅ Stories (www.instagram.com/stories/username).
+- ✅ Albums (www.instagram.com/p/).
+- ✅ User Posts (www.instagram.com/username/p).
+- ✅ Share (www.instagram.com/share/p).
+- ✅ Singular Media in Album (www.instagram.com/p/[hash]/1).
+- ✅ With or Without Post Details (vxinstagram.com / d.vxinstagram.com).
+- ❌ User information, list of reels, list of posts, tags, and search queries.
+
+For more information, visit [vxinstagram.com](https://vxinstagram.com)
 
 ## How It Works
 
 1. User pastes an Instagram link with "vx" at the beginning (vxinstagram) (e.g., into Discord).
 2. The page generates a preview with embedded media using Open Graph tags.
 3. The platform (e.g., Discord) renders the embed automatically.
-
----
 
 ## API Integration
 
@@ -27,21 +37,15 @@ InstagramEmbed uses this backend API for fetching Instagram content:
 **Snapsave Media Downloader [ahmedrangel](https://github.com/ahmedrangel)**  
 🔗 https://github.com/ahmedrangel/snapsave-media-downloader
 
----
-
 ## Credits
 
 - [Snapsave Media Downloader by Ahmed Rangel](https://github.com/ahmedrangel/snapsave-media-downloader)
 - UI & backend by [Lainmode](https://github.com/Lainmode)
 - Twitter: [@realAlita](https://twitter.com/realAlita)
 
----
-
 ## Support
 
 If you like this project, consider [buying me a coffee](https://www.buymeacoffee.com/alsauce)!
-
----
 
 ## License
 
