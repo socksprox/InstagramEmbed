@@ -1,4 +1,4 @@
-﻿using InstagramEmbedForDiscord.DAL;
+using InstagramEmbedForDiscord.DAL;
 using InstagramEmbedForDiscord.Models;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
@@ -56,6 +56,10 @@ namespace InstagramEmbedForDiscord.Controllers
                 if (string.IsNullOrWhiteSpace(path))
                     return BadRequest("Invalid Instagram path.");
 
+                // Check if request is from direct subdomain (d.*)
+                var host = Request.Host.Host;
+                bool isDirect = host.StartsWith("d.", StringComparison.OrdinalIgnoreCase);
+
                 var segments = path.Trim('/').Split('/');
 
                 int orderIndex = -1;
@@ -102,11 +106,8 @@ namespace InstagramEmbedForDiscord.Controllers
                     var instagramResponse = await GetSnapsaveResponse(link, client);
                     var media = instagramResponse.url?.data?.media;
 
-                    // Only fetch PostDetails if host matches d.vxinstagram.com
-                    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
-                    {
-                        ViewBag.PostDetails = await GetPostDetails(client, id);
-                    }
+                    // Always fetch PostDetails for proper embed metadata
+                    ViewBag.PostDetails = await GetPostDetails(client, id);
 
                     if (media == null || media.Count == 0)
                         return BadRequest("No media found.");
@@ -116,15 +117,15 @@ namespace InstagramEmbedForDiscord.Controllers
 
                     if (media.Count == 1)
                     {
-                        return ProcessSingleItem(media.First(), client, link);
+                        return ProcessSingleItem(media.First(), client, link, isDirect);
                     }
 
                     // Use orderIndex if valid
                     if (orderIndex > 0 && orderIndex <= media.Count)
-                        return ProcessSingleItem(media[orderIndex - 1], client, link);
+                        return ProcessSingleItem(media[orderIndex - 1], client, link, isDirect);
 
                     // Otherwise, return multiple items
-                    return await ProcessMultipleItems(media, link, id);
+                    return await ProcessMultipleItems(media, link, id, isDirect);
                 }
             }
             catch (Exception ex)
@@ -198,11 +199,11 @@ namespace InstagramEmbedForDiscord.Controllers
         {
             return Json(new OEmbedModel()
             {
-                author_name = desc!=null? !desc.IsNullOrEmpty()?desc: $"@{username}": $"@{username}",
+                author_name = $"@{username}",
                 author_url = "https://instagram.com/" + username,
-                provider_name = "vxinstagram",
-                provider_url = "https://github.com/Lainmode/InstagramEmbed-vxinstagram",
-                title = "",
+                provider_name = "InstagramEmbed",
+                provider_url = "https://github.com/Lainmode/InstagramEmbedForDiscord",
+                title = desc ?? $"@{username}",
                 type = "video",
                 version = "1.0"
             });
@@ -335,12 +336,18 @@ namespace InstagramEmbedForDiscord.Controllers
             
         }
 
-        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink) 
+        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink, bool isDirect = false) 
         {
             var contentUrl = media.url;
             var thumbnailUrl = media.thumbnail;
 
             bool isPhoto = media.type == "image";
+
+            // If direct subdomain, redirect directly to media
+            if (isDirect)
+            {
+                return Redirect(contentUrl);
+            }
 
             if (isPhoto)
             {
@@ -359,7 +366,7 @@ namespace InstagramEmbedForDiscord.Controllers
             return View(data);
         }
 
-        private async Task<IActionResult> ProcessMultipleItems(List<InstagramMedia> media, string originalLink, string id)
+        private async Task<IActionResult> ProcessMultipleItems(List<InstagramMedia> media, string originalLink, string id, bool isDirect = false)
         {
 
             string? fileName = await GetGeneratedFile(media, id);
@@ -367,6 +374,12 @@ namespace InstagramEmbedForDiscord.Controllers
             if (fileName == null) return BadRequest("Could not process images.");
 
             string contentUrl = $"https://{Request.Host}/generated/{fileName}";
+
+            // If direct subdomain, redirect directly to the generated grid image
+            if (isDirect)
+            {
+                return Redirect($"/generated/{fileName}");
+            }
 
             ViewBag.IsPhoto = true;
             ViewBag.Files = media;

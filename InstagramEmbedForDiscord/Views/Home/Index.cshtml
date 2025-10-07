@@ -1,4 +1,4 @@
-﻿@using InstagramEmbedForDiscord.Controllers;
+@using InstagramEmbedForDiscord.Controllers;
 @model string[]
 @{
     Layout = null;
@@ -36,13 +36,7 @@
         <meta property="og:image" content="@contentUrl" />
         <meta name="twitter:card" content="summary_large_image">
         <meta name="twitter:image" content="@contentUrl" />
-
-        @if(postDetails!=null)
-        {
-            <meta property="og:description"
-                  content="@postDetails.Description">
-        }
-  }
+    }
     else
     {
         <meta property="og:type" content="video.other" />
@@ -51,15 +45,27 @@
         <meta property="og:video:secure_url" content="@contentUrl" />
         <meta property="og:video:type" content="video/mp4" />
         <meta name="twitter:player" content="@url" />
-        <meta name="twitter:card" content="video.other" />
+        <meta name="twitter:card" content="player" />
+        
+        @* Include thumbnail for apps like Signal that can't play videos *@
+        @if(!string.IsNullOrEmpty(thumbnailUrl))
+        {
+            <meta property="og:image" content="@thumbnailUrl" />
+            <meta name="twitter:image" content="@thumbnailUrl" />
+        }
 
     }
     
-     <meta property="og:site_name" content="vxinstagram" />
+     <meta property="og:site_name" content="InstagramEmbed" />
     <meta property="theme-color" content="#eb4034" />
-    <meta property="twitter:title" content="@postDetails?.Username" />
+    <meta property="og:title" content="@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")" />
+    <meta name="twitter:title" content="@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")" />
     <meta property="twitter:site" content="@postDetails?.Username" />
-    <meta property="og:site_name" content="vxInstagram" />
+    @if(postDetails?.Description != null)
+    {
+        <meta property="og:description" content="@postDetails.Description" />
+        <meta name="twitter:description" content="@postDetails.Description" />
+    }
     <link rel="canonical" href="@url" />
     <meta property="og:url" content="@url" />
 
@@ -73,7 +79,7 @@
  *@     }
   
     
-    <title>InstagramEmbed</title>
+    <title>@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")</title>
 </head>
 <body class=" d-flex-column bg-dark text-light align-items-center justify-content-center">
 
