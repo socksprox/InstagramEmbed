@@ -1,5 +1,6 @@
 ﻿using InstagramEmbedForDiscord.DAL;
 using InstagramEmbedForDiscord.Models;
+using InstagramEmbedForDiscord.Models.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
@@ -181,9 +182,22 @@ namespace InstagramEmbedForDiscord.Controllers
             {
                 try
                 {
-                    var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl));
+                    var headRequest = new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl);
+                    var response = await client.SendAsync(headRequest);
 
-                    if (response.IsSuccessStatusCode)
+                    bool linkStillValid = response.IsSuccessStatusCode;
+
+                    if (linkStillValid)
+                    {
+                        if (response.Content.Headers.ContentType == null ||
+                            !response.Content.Headers.ContentType.MediaType.StartsWith("image") &&
+                            !response.Content.Headers.ContentType.MediaType.StartsWith("video"))
+                        {
+                            linkStillValid = false;
+                        }
+                    }
+
+                    if (linkStillValid)
                     {
                         return Redirect(rapidsaveUrl);
                     }
@@ -195,11 +209,10 @@ namespace InstagramEmbedForDiscord.Controllers
                         return BadRequest("No media found for this post.");
 
                     if (orderIndex >= mediaList.Count)
-                    {
                         orderIndex = 0;
-                    }
 
                     var media = mediaList[orderIndex];
+
                     return Redirect(media.url);
                 }
                 catch (Exception ex)
@@ -207,6 +220,82 @@ namespace InstagramEmbedForDiscord.Controllers
                     return View("Error");
                 }
             }
+        }
+
+
+
+        [Route("/offload/{id}/{order?}")]
+        public async Task<IActionResult> OffloadPost(int id, int? order)
+        {
+            int orderIndex = (order ?? 1) - 1;
+            if (orderIndex < 0) orderIndex = 0;
+
+            IGContext db = new IGContext();
+
+            var post = db.Posts.Find(id);
+
+            if (post == null)
+                return NotFound();
+
+            var entry = post.SnapSaveEntries.ElementAtOrDefault(orderIndex);
+
+            // if for some reason the order is out of bounds, which can only happen if order > length, take the last entry
+            entry ??= post.SnapSaveEntries.LastOrDefault();
+            if (entry == null)
+                return NotFound();
+
+            using (HttpClient client = new HttpClient())
+            {
+                try
+                {
+                    var headRequest = new HttpRequestMessage(HttpMethod.Head, entry.MediaUrl);
+                    var response = await client.SendAsync(headRequest);
+
+                    bool linkStillValid = response.IsSuccessStatusCode;
+
+                    if (linkStillValid)
+                    {
+                        if (response.Content.Headers.ContentType == null || response.Content.Headers.ContentType.MediaType == null ||
+                            !(response.Content.Headers.ContentType.MediaType.StartsWith("image") ||
+                            response.Content.Headers.ContentType.MediaType.StartsWith("video")))
+                        {
+                            linkStillValid = false;
+                        }
+                    }
+
+                    if (linkStillValid)
+                    {
+                        return Redirect(entry.MediaUrl);
+                    }
+
+                    var instagramResponse = await GetSnapsaveResponse(post.RawUrl, client);
+                    var mediaList = instagramResponse.url?.data?.media;
+
+                    if (mediaList == null || mediaList.Count == 0)
+                        return BadRequest("No media found for this post.");
+
+                    if (orderIndex >= mediaList.Count)
+                        orderIndex = 0;
+
+                    var media = mediaList[orderIndex];
+
+                    entry.MediaUrl = media.url;
+                    entry.MediaType = media.type == "video" ? MediaType.Video : MediaType.Image;
+
+                    post.UpdatedAt = DateTime.Now;
+                    entry.UpdatedAt = DateTime.Now;
+
+                    db.SaveChanges();
+
+                    return Redirect(media.url);
+                }
+
+                catch (Exception ex)
+                {
+                    return BadRequest();
+                }
+            }
+
         }
 
 
