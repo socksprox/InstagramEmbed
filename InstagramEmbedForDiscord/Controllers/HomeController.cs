@@ -35,7 +35,7 @@ namespace InstagramEmbedForDiscord.Controllers
         {
             base.OnActionExecuting(context);
             var httpContext = context.HttpContext;
-            
+
             Task.Run(() =>
             {
                 var dbContext = new IGContext();
@@ -82,7 +82,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     type = $"stories/{username}";
                 }
 
-                else if(username?.ToLower() == "share")
+                else if (username?.ToLower() == "share")
                 {
                     type = $"share/{type}";
                 }
@@ -151,7 +151,7 @@ namespace InstagramEmbedForDiscord.Controllers
             if (!System.IO.File.Exists(filePath))
             {
                 var postId = Path.GetFileNameWithoutExtension(fileName);
-                using(HttpClient client = new HttpClient())
+                using (HttpClient client = new HttpClient())
                 {
                     var instagramResponse = await GetSnapsaveResponse("https://instagram.com/p/" + postId, client);
                     if (instagramResponse.url?.data?.media == null || instagramResponse.url.data.media.Count == 0)
@@ -172,33 +172,50 @@ namespace InstagramEmbedForDiscord.Controllers
         }
 
         [Route("/VerifySnapsaveLink")]
-        public async Task<IActionResult> VerifySnapsaveLink(string rapidsaveUrl,string postId, int? order)
+        public async Task<IActionResult> VerifySnapsaveLink(string rapidsaveUrl, string postId, int? order)
         {
-            order = order != null ? order - 1 : 0;
-            order = order < 0 ? 0 : order;
+            int orderIndex = (order ?? 1) - 1;
+            if (orderIndex < 0) orderIndex = 0;
 
             using (HttpClient client = new HttpClient())
             {
-                var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl));
-
-                if(response.IsSuccessStatusCode)
+                try
                 {
-                    return Redirect(rapidsaveUrl);
+                    var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl));
+
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return Redirect(rapidsaveUrl);
+                    }
+
+                    var instagramResponse = await GetSnapsaveResponse($"https://instagram.com/p/{postId}/", client);
+                    var mediaList = instagramResponse.url?.data?.media;
+
+                    if (mediaList == null || mediaList.Count == 0)
+                        return BadRequest("No media found for this post.");
+
+                    if (orderIndex >= mediaList.Count)
+                    {
+                        orderIndex = 0;
+                    }
+
+                    var media = mediaList[orderIndex];
+                    return Redirect(media.url);
                 }
-
-                var instagramResponse = await GetSnapsaveResponse("https://instagram.com/p/" + postId + "/", client);
-                var media = instagramResponse.url?.data?.media[order.Value];
-
-                return Redirect(media!.url);
+                catch (Exception ex)
+                {
+                    return View("Error");
+                }
             }
         }
+
 
         [Route("/oembed")]
         public IActionResult OEmbed(string username, string? desc)
         {
             return Json(new OEmbedModel()
             {
-                author_name = desc!=null? !desc.IsNullOrEmpty()?desc: $"@{username}": $"@{username}",
+                author_name = desc != null ? !desc.IsNullOrEmpty() ? desc : $"@{username}" : $"@{username}",
                 author_url = "https://instagram.com/" + username,
                 provider_name = "vxinstagram",
                 provider_url = "https://github.com/Lainmode/InstagramEmbed-vxinstagram",
@@ -226,7 +243,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     avatar_static = "https://offload.tnktok.com/generate/pfp/www.cherryfairy.com",
                     created_at = DateTime.UtcNow,
                     acct = username,
-                    
+
                 },
                 media_attachments = new List<MediaAttachment>()
                 {
@@ -326,16 +343,16 @@ namespace InstagramEmbedForDiscord.Controllers
 
         private async Task<InstagramResponse> GetSnapsaveResponse(string link, HttpClient client)
         {
-         
+
             HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link);
             string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
             InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
             return instagramResponse;
-            
+
         }
 
-        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink) 
+        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink)
         {
             var contentUrl = media.url;
             var thumbnailUrl = media.thumbnail;
@@ -470,22 +487,22 @@ namespace InstagramEmbedForDiscord.Controllers
         {
             List<Task> tasks = [];
             List<SKBitmap?> bitmaps = [];
-            List <KeyValuePair<int, SKBitmap?>?> keyValuePairs = [];
-            foreach(var item in media)
+            List<KeyValuePair<int, SKBitmap?>?> keyValuePairs = [];
+            foreach (var item in media)
             {
                 bool isVideo = item.type == "video";
                 string image = isVideo ? item.thumbnail : item.url;
-                tasks.Add(Task.Run(async () => keyValuePairs.Add(await LoadJpegFromUrlAsync(image,media.IndexOf(item) , isVideo))));
+                tasks.Add(Task.Run(async () => keyValuePairs.Add(await LoadJpegFromUrlAsync(image, media.IndexOf(item), isVideo))));
             }
             Task t = Task.WhenAll(tasks);
             await t;
 
 
-            bitmaps = keyValuePairs.Where(f => f != null).OrderBy(e => e.Value.Key).Select(g=>g.Value.Value).ToList();
+            bitmaps = keyValuePairs.Where(f => f != null).OrderBy(e => e.Value.Key).Select(g => g.Value.Value).ToList();
             return bitmaps.Where(e => e != null).ToList() as List<SKBitmap>;
         }
 
-        private async Task<KeyValuePair<int, SKBitmap?>?> LoadJpegFromUrlAsync(string imageUrl, int index, bool isVideo=false)
+        private async Task<KeyValuePair<int, SKBitmap?>?> LoadJpegFromUrlAsync(string imageUrl, int index, bool isVideo = false)
         {
             using (HttpClient client = new HttpClient())
             {
@@ -496,7 +513,7 @@ namespace InstagramEmbedForDiscord.Controllers
                     using (var stream = new SKMemoryStream(imageBytes))
                     {
                         var bitmap = SKBitmap.Decode(stream);
-                        if(isVideo)
+                        if (isVideo)
                         {
                             SKCanvas canvas = new SKCanvas(bitmap);
                             var bytes = System.IO.File.ReadAllBytes(Path.Combine(_env.WebRootPath, "video.png"));
@@ -504,7 +521,7 @@ namespace InstagramEmbedForDiscord.Controllers
                             var paint = new SKPaint
                             {
                                 Color = SKColors.White.WithAlpha(220)
-                                
+
                             };
 
                             float x = 10;

@@ -1,5 +1,6 @@
 ﻿namespace InstagramEmbedForDiscord.DAL
 {
+    using InstagramEmbedForDiscord.Models.Entities;
     using Microsoft.EntityFrameworkCore;
     using Microsoft.JSInterop;
     using System.Linq.Expressions;
@@ -8,6 +9,7 @@
     {
         private readonly string connectionString = "YOUR_CONNECTION_STRING";
         public DbSet<ActionLog> ActionLogs { get; set; }
+        public DbSet<Post> Posts { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -19,14 +21,14 @@
             // Use your connection string here
 
             optionsBuilder
-               // .UseLazyLoadingProxies() // Enable lazy loading
+                // .UseLazyLoadingProxies() // Enable lazy loading
                 .UseSqlServer(connectionString);
 
             base.OnConfiguring(optionsBuilder);
         }
 
 
-      
+
     }
 
 
