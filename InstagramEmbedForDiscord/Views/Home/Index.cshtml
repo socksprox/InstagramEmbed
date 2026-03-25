@@ -81,22 +81,40 @@
     
     <title>@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")</title>
 </head>
-<body class=" d-flex-column bg-dark text-light align-items-center justify-content-center">
+<body class="bg-dark text-light position-relative" style="min-height: 100vh;">
 
-    <div class="d-flex border-bottom border-secondary p-4 align-items-center justify-content-between shadow">
-        <div>
+    <!-- About the Maker Button -->
+    <div class="position-absolute top-0 end-0 p-3" style="z-index: 1000;">
+        <button type="button" class="btn btn-sm btn-outline-secondary text-light rounded-circle" data-bs-toggle="modal" data-bs-target="#aboutMakerModal" style="width: 2.5rem; height: 2.5rem; padding: 0;" title="About the Maker">
+            <span style="font-size: 1.3rem;">♡</span>
+        </button>
+    </div>
 
-        <div class="text-secondary">InstagramEmbed by <a href="https://github.com/Lainmode/InstagramEmbedForDiscord" target="_blank">Lainmode</a></div>
-        <div class="text-secondary">Twitter <a href="https://twitter.com/realalita" target="_blank">@@realAlita</a></div>
+    <!-- About the Maker Modal -->
+    <div class="modal fade" id="aboutMakerModal" tabindex="-1" aria-labelledby="aboutMakerModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content bg-dark text-light">
+                <div class="modal-header border-secondary">
+                    <h5 class="modal-title" id="aboutMakerModalLabel">About the Maker</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <p><strong>InstagramEmbed</strong> by <a href="https://github.com/Lainmode/InstagramEmbedForDiscord" target="_blank" class="text-info">Lainmode</a></p>
+                        <p>Twitter: <a href="https://twitter.com/realalita" target="_blank" class="text-info">@@realAlita</a></p>
+                    </div>
+                    <div class="text-center">
+                        <a target="_blank" href="https://www.buymeacoffee.com/alsauce">
+                            <img style="height:3rem" src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=alsauce&button_colour=954b89&font_colour=ffffff&font_family=Cookie&outline_colour=ffffff&coffee_colour=FFDD00" />
+                        </a>
+                    </div>
+                </div>
+            </div>
         </div>
+    </div>
 
-        <a target="_blank" href="https://www.buymeacoffee.com/alsauce"><img class="mb-2" style="height:2.5rem" src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=alsauce&button_colour=954b89&font_colour=ffffff&font_family=Cookie&outline_colour=ffffff&coffee_colour=FFDD00" /></a>
-
-</div>
-
-
-
-    <div class="row g-5 align-items-center w-100 justify-content-center mx-auto  p-4">
+    <div class="d-flex align-items-center justify-content-center" style="min-height: 100vh; padding-top: 2rem; padding-bottom: 2rem;">
+    <div class="row g-5 align-items-center w-100 justify-content-center mx-auto px-4">
         @foreach (var item in files)
         {
             var contentUrlForItem = $"{baseUrl}/VerifySnapsaveLink?postid={postId}&order={files.IndexOf(item)+1}&rapidsaveUrl={item.url}";
@@ -132,5 +150,8 @@
     </div>
     }
     </div>
+    </div>
+
+    <script src="~/lib/bootstrap/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
