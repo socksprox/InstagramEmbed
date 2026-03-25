@@ -1,19 +1,25 @@
-using InstagramEmbedForDiscord.DAL;
-using InstagramEmbedForDiscord.Models;
-using InstagramEmbedForDiscord.Models.Entities;
+using Azure;
+using InstagramEmbed.DataAccess;
+using InstagramEmbed.Domain.Entities;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Microsoft.AspNetCore.Mvc.Formatters;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Conventions;
 using Microsoft.EntityFrameworkCore.Metadata.Internal;
 using Microsoft.IdentityModel.Tokens;
 using Newtonsoft.Json;
 using SkiaSharp;
 using System;
+using System.Buffers.Text;
 using System.Diagnostics;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Claims;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
@@ -25,11 +31,16 @@ namespace InstagramEmbedForDiscord.Controllers
     {
         private readonly ILogger<HomeController> _logger;
         private readonly IWebHostEnvironment _env;
+        private readonly HttpClient _regularClient;
 
-        public HomeController(ILogger<HomeController> logger, IWebHostEnvironment env)
+        private InstagramContext Db;
+
+        public HomeController(ILogger<HomeController> logger, IWebHostEnvironment env, IHttpClientFactory factory, InstagramContext db)
         {
+            _regularClient = factory.CreateClient("regular");
             _logger = logger;
             _env = env;
+            Db = db;
         }
 
         public override void OnActionExecuting(ActionExecutingContext context)
@@ -39,9 +50,17 @@ namespace InstagramEmbedForDiscord.Controllers
 
             Task.Run(() =>
             {
-                var dbContext = new IGContext();
+                var dbContext = new InstagramContext();
 
-                var log = ActionLog.CreateActionLog(httpContext);
+                var ipAddress = "127.0.0.1";
+
+                var forwardedFor = httpContext.Request.Headers["X-Forwarded-For"].FirstOrDefault();
+                if (!string.IsNullOrEmpty(forwardedFor))
+                    ipAddress = forwardedFor.Split(',')[0];
+
+                ipAddress = httpContext.Connection.RemoteIpAddress?.ToString() ?? ipAddress;
+
+                var log = ActionLog.CreateActionLog(httpContext.Request.Method, httpContext.Request.Path + httpContext.Request.QueryString, httpContext.Request.Headers["User-Agent"].ToString(), ipAddress);
 
                 dbContext.ActionLogs.Add(log);
                 dbContext.SaveChanges();
@@ -54,32 +73,49 @@ namespace InstagramEmbedForDiscord.Controllers
         {
             try
             {
+
                 if (string.IsNullOrWhiteSpace(path))
                     return BadRequest("Invalid Instagram path.");
 
-                // Check if request is from direct subdomain (d.*)
-                var host = Request.Host.Host;
-                bool isDirect = host.StartsWith("d.", StringComparison.OrdinalIgnoreCase);
+                bool scrapeForPostInfomration = Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase);
+                bool isDirect = Request.Host.Host.StartsWith("d.", StringComparison.OrdinalIgnoreCase);
 
                 var segments = path.Trim('/').Split('/');
 
-                int orderIndex = -1;
+                int orderIndex = 0;
+                bool orderSpecified = false;
                 string? lastSegment = segments.LastOrDefault();
 
                 if (int.TryParse(lastSegment, out int parsedIndex))
                 {
-                    orderIndex = parsedIndex <= 0 ? 1 : parsedIndex;
+                    orderIndex = parsedIndex <= 0 ? 0 : parsedIndex - 1;
                     segments = segments.Take(segments.Length - 1).ToArray();
+
+                    orderSpecified = true;
                 }
                 else if (imgIndex.HasValue)
                 {
-                    orderIndex = imgIndex.Value <= 0 ? 1 : imgIndex.Value;
+                    orderIndex = imgIndex.Value <= 0 ? 0 : imgIndex.Value;
+
+                    orderSpecified = true;
                 }
 
-                string? id = segments.LastOrDefault();                // hash
+                string? id = segments.Last();                // hash
                 string? type = segments.Length > 1 ? segments[^2] : segments.FirstOrDefault(); // p, reel, etc.
                 string? username = segments.Length > 2 ? segments[0] : null;
 
+                ViewBag.PostId = id;
+                ViewBag.Order = orderIndex;
+
+                Post? post = Db.Posts.Find(id);
+
+                if (post != null)
+                {
+                    await RefreshPostIfNeeded(post, scrapeForPostInfomration);
+
+                    ViewBag.Post = post;
+                    return await ProcessMedia(post, post.RawUrl, id, orderIndex, orderSpecified, isDirect);
+                }
 
                 if (username?.ToLower() == "stories")
                 {
@@ -96,44 +132,124 @@ namespace InstagramEmbedForDiscord.Controllers
                 string link = $"https://instagram.com/{type}/{id}/";
 
 
-                ViewBag.PostId = id;
-                ViewBag.Order = orderIndex;
+                Post? newPost = null;
 
-                using (HttpClient client = new HttpClient())
+                if (scrapeForPostInfomration)
                 {
-                    client.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Mozilla", "5.0"));
-
-                    // Fetch SnapSave/Instagram API response
-                    var instagramResponse = await GetSnapsaveResponse(link, client);
-                    var media = instagramResponse.url?.data?.media;
-
-                    // Always fetch PostDetails for proper embed metadata
-                    ViewBag.PostDetails = await GetPostDetails(client, id);
-
-                    if (media == null || media.Count == 0)
-                        return BadRequest("No media found.");
-
-                    // Limit media to max 16 items
-                    media = media.Take(16).ToList();
-
-                    if (media.Count == 1)
-                    {
-                        return ProcessSingleItem(media.First(), client, link, isDirect);
-                    }
-
-                    // Use orderIndex if valid
-                    if (orderIndex > 0 && orderIndex <= media.Count)
-                        return ProcessSingleItem(media[orderIndex - 1], client, link, isDirect);
-
-                    // Otherwise, return multiple items
-                    return await ProcessMultipleItems(media, link, id, isDirect);
+                    newPost = await FetchPostFromGraphQL(link, id);
                 }
+
+                else
+                {
+                    newPost = await FetchPostFromSnapSave(link, id);
+                }
+
+                if (newPost == null) return NotFound();
+
+                try
+                {
+                    Db.Posts.Add(newPost);
+                    Db.SaveChanges();
+                    post = newPost;
+                }
+                catch (DbUpdateException f)
+                {
+                    post = Db.Posts.Find(id);
+
+                    if (post!.AuthorUsername == "NOT_SET" && newPost.AuthorUsername != "NOT_SET")
+                    {
+                        post.AuthorUsername = newPost.AuthorUsername;
+                        post.AvatarUrl = newPost.AvatarUrl;
+                        post.AuthorName = newPost.AuthorName;
+                        post.Caption = newPost.Caption;
+                        post.Comments = newPost.Comments;
+                        post.Likes = newPost.Likes;
+
+                        post.Height = newPost.Height;
+                        post.Width = newPost.Width;
+
+                        post.DefaultThumbnailUrl = newPost.DefaultThumbnailUrl;
+                        post.TrackName = newPost.TrackName;
+
+                        Db.SaveChanges();
+                    }
+                }
+
+                ViewBag.Post = post;
+                return await ProcessMedia(post!, post.RawUrl, id, orderIndex, orderSpecified, isDirect);
             }
             catch (Exception ex)
             {
-                Console.WriteLine(ex.Message); // Replace with ILogger in production
+                Console.WriteLine(ex.ToString());
                 return View("Error");
             }
+        }
+
+        public async Task<Post> FetchPostFromGraphQL(string link, string id)
+        {
+            InstagramResponse? instagramResponse = null;
+
+            _ = Task.Run(async () => instagramResponse = await GetSnapsaveResponse(link));
+
+            InstagramPostDetails postDetails = await GetPostDetails(id);
+
+            Post newPost = new Post()
+            {
+                RawUrl = link,
+                AuthorName = postDetails.Name,
+                AvatarUrl = postDetails.Avatar,
+                AuthorUsername = postDetails.Username,
+                Caption = postDetails.Description,
+                Comments = postDetails.Comments,
+                Likes = postDetails.Likes,
+                ShortCode = id,
+                Height = postDetails.VideoHeight ?? 720,
+                Width = postDetails.VideoWidth ?? 1280,
+                DefaultThumbnailUrl = postDetails.VideoThumbnail,
+                TrackName = postDetails.TrackName,
+                ExpiresOn = DateTime.UtcNow.AddMinutes(5)
+            };
+
+            foreach (var item in postDetails.Media)
+            {
+                newPost.Media.Add(item);
+            }
+
+            return newPost;
+
+        }
+
+        public async Task<Post> FetchPostFromSnapSave(string link, string id)
+        {
+            var instagramResponse = await GetSnapsaveResponse(link);
+            var media = instagramResponse.url?.data?.media;
+            InstagramPostDetails postDetails = new InstagramPostDetails() { Username = "NOT_SET" };
+
+            if (media == null || media.Count == 0)
+                throw new Exception(link);
+
+            Post newPost = new Post()
+            {
+                RawUrl = link,
+                AuthorName = postDetails.Name,
+                AvatarUrl = postDetails.Avatar,
+                AuthorUsername = postDetails.Username,
+                Caption = postDetails.Description,
+                Comments = postDetails.Comments,
+                Likes = postDetails.Likes,
+                ShortCode = id,
+                Height = postDetails.VideoHeight ?? 720,
+                Width = postDetails.VideoWidth ?? 1280,
+                DefaultThumbnailUrl = postDetails.VideoThumbnail,
+                TrackName = postDetails.TrackName
+            };
+
+            foreach (var item in media)
+            {
+                newPost.Media.Add(new Media() { RapidSaveUrl = item.url, MediaType = item.type, ThumbnailUrl = item.thumbnail });
+            }
+
+            return newPost;
         }
 
 
@@ -153,209 +269,165 @@ namespace InstagramEmbedForDiscord.Controllers
             if (!System.IO.File.Exists(filePath))
             {
                 var postId = Path.GetFileNameWithoutExtension(fileName);
-                using (HttpClient client = new HttpClient())
-                {
-                    var instagramResponse = await GetSnapsaveResponse("https://instagram.com/p/" + postId, client);
-                    if (instagramResponse.url?.data?.media == null || instagramResponse.url.data.media.Count == 0)
-                        return NotFound();
+                var instagramResponse = await GetSnapsaveResponse($"https://instagram.com/p/{postId}/");
+                if (instagramResponse.url?.data?.media == null || instagramResponse.url.data.media.Count == 0)
+                    return NotFound();
 
-                    var newFileName = await GetGeneratedFile(instagramResponse.url?.data?.media ?? new List<InstagramMedia>(), postId);
-                    if (newFileName == null) return NotFound();
+                var newFileName = await GetGeneratedFile(instagramResponse.url.data.media, postId);
+                if (newFileName == null)
+                    return NotFound();
 
-                    string newFilePath = Path.Combine(folderPath, newFileName);
-
-                    var newImageBytes = System.IO.File.ReadAllBytes(filePath);
-                    return File(newImageBytes, "image/jpeg");
-                }
+                filePath = Path.Combine(folderPath, newFileName);
             }
 
-            var imageBytes = System.IO.File.ReadAllBytes(filePath);
+            if (!System.IO.File.Exists(filePath))
+                return NotFound();
+
+            var imageBytes = await System.IO.File.ReadAllBytesAsync(filePath);
             return File(imageBytes, "image/jpeg");
         }
 
-        [Route("/VerifySnapsaveLink")]
-        public async Task<IActionResult> VerifySnapsaveLink(string rapidsaveUrl, string postId, int? order)
-        {
-            int orderIndex = (order ?? 1) - 1;
-            if (orderIndex < 0) orderIndex = 0;
-
-            using (HttpClient client = new HttpClient())
-            {
-                try
-                {
-                    var headRequest = new HttpRequestMessage(HttpMethod.Head, rapidsaveUrl);
-                    var response = await client.SendAsync(headRequest);
-
-                    bool linkStillValid = response.IsSuccessStatusCode;
-
-                    if (linkStillValid)
-                    {
-                        if (response.Content.Headers.ContentType == null ||
-                            !response.Content.Headers.ContentType.MediaType.StartsWith("image") &&
-                            !response.Content.Headers.ContentType.MediaType.StartsWith("video"))
-                        {
-                            linkStillValid = false;
-                        }
-                    }
-
-                    if (linkStillValid)
-                    {
-                        return Redirect(rapidsaveUrl);
-                    }
-
-                    var instagramResponse = await GetSnapsaveResponse($"https://instagram.com/p/{postId}/", client);
-                    var mediaList = instagramResponse.url?.data?.media;
-
-                    if (mediaList == null || mediaList.Count == 0)
-                        return BadRequest("No media found for this post.");
-
-                    if (orderIndex >= mediaList.Count)
-                        orderIndex = 0;
-
-                    var media = mediaList[orderIndex];
-
-                    return Redirect(media.url);
-                }
-                catch (Exception ex)
-                {
-                    return View("Error");
-                }
-            }
-        }
-
-
-
         [Route("/offload/{id}/{order?}")]
-        public async Task<IActionResult> OffloadPost(int id, int? order)
+        [Route("/offload/{id}")]
+        public async Task<IActionResult> OffloadPost(string id, int? order, bool? thumbnail = false)
         {
-            int orderIndex = (order ?? 1) - 1;
+            int orderIndex = (order ?? 0);
             if (orderIndex < 0) orderIndex = 0;
 
-            IGContext db = new IGContext();
 
-            var post = db.Posts.Find(id);
+            var post = Db.Posts.Find(id);
 
             if (post == null)
                 return NotFound();
 
-            var entry = post.SnapSaveEntries.ElementAtOrDefault(orderIndex);
+            await RefreshPostIfNeeded(post, false);
+
+            var entry = post.Media.ElementAtOrDefault(orderIndex);
 
             // if for some reason the order is out of bounds, which can only happen if order > length, take the last entry
-            entry ??= post.SnapSaveEntries.LastOrDefault();
+            entry ??= post.Media.LastOrDefault();
             if (entry == null)
                 return NotFound();
 
-            using (HttpClient client = new HttpClient())
+            if (thumbnail ?? false)
             {
-                try
-                {
-                    var headRequest = new HttpRequestMessage(HttpMethod.Head, entry.MediaUrl);
-                    var response = await client.SendAsync(headRequest);
-
-                    bool linkStillValid = response.IsSuccessStatusCode;
-
-                    if (linkStillValid)
-                    {
-                        if (response.Content.Headers.ContentType == null || response.Content.Headers.ContentType.MediaType == null ||
-                            !(response.Content.Headers.ContentType.MediaType.StartsWith("image") ||
-                            response.Content.Headers.ContentType.MediaType.StartsWith("video")))
-                        {
-                            linkStillValid = false;
-                        }
-                    }
-
-                    if (linkStillValid)
-                    {
-                        return Redirect(entry.MediaUrl);
-                    }
-
-                    var instagramResponse = await GetSnapsaveResponse(post.RawUrl, client);
-                    var mediaList = instagramResponse.url?.data?.media;
-
-                    if (mediaList == null || mediaList.Count == 0)
-                        return BadRequest("No media found for this post.");
-
-                    if (orderIndex >= mediaList.Count)
-                        orderIndex = 0;
-
-                    var media = mediaList[orderIndex];
-
-                    entry.MediaUrl = media.url;
-                    entry.MediaType = media.type == "video" ? MediaType.Video : MediaType.Image;
-
-                    post.UpdatedAt = DateTime.Now;
-                    entry.UpdatedAt = DateTime.Now;
-
-                    db.SaveChanges();
-
-                    return Redirect(media.url);
-                }
-
-                catch (Exception ex)
-                {
-                    return BadRequest();
-                }
+                return Redirect(entry.MediaType == "video" ? post.DefaultThumbnailUrl ?? entry.ThumbnailUrl : entry.ThumbnailUrl);
             }
+
+            return Redirect(entry.RapidSaveUrl);
 
         }
 
 
+        private async Task<IActionResult> ProcessMedia(Post dbPost, string link, string id, int orderIndex, bool orderSpecified, bool isDirect)
+        {
+            if (dbPost.Media.Count == 1 || orderSpecified)
+            {
+                var entry = dbPost.Media.ElementAtOrDefault(orderIndex);
+                entry ??= dbPost.Media.First();
+                return ProcessSingleItem(new InstagramMedia
+                {
+                    url = entry.RapidSaveUrl,
+                    thumbnail = entry.ThumbnailUrl,
+                    type = entry.MediaType.ToString().ToLower()
+                }, link, id, isDirect);
+            }
+            return await ProcessMultipleItems(
+                dbPost.Media.Take(16).Select(e => new InstagramMedia
+                {
+                    url = e.RapidSaveUrl,
+                    thumbnail = e.ThumbnailUrl,
+                    type = e.MediaType.ToString().ToLower()
+                }).ToList(),
+                link,
+                id,
+                isDirect
+            );
+        }
+
         [Route("/oembed")]
-        public IActionResult OEmbed(string username, string? desc)
+        public IActionResult OEmbed(string username, string? desc, string? likescomments)
         {
             return Json(new OEmbedModel()
             {
-                author_name = desc != null ? !desc.IsNullOrEmpty() ? desc : $"@{username}" : $"@{username}",
+                author_name = desc != null ? !desc.IsNullOrEmpty() ? desc : $"{username}" : $"{username}",
                 author_url = "https://instagram.com/" + username,
-                provider_name = "InstagramEmbed",
-                provider_url = "https://github.com/Lainmode/InstagramEmbedForDiscord",
-                title = desc ?? $"@{username}",
+                provider_name = $"vxinstagram {likescomments}",
+                provider_url = "https://github.com/Lainmode/InstagramEmbed-vxinstagram",
+                title = "",
                 type = "video",
                 version = "1.0"
             });
         }
 
-
-        [Route("/users/username/statuses/7523033599046667550")]
-        public IActionResult Activity(string link, string username, string avatar, string likes, string mediaType, string postId)
+        [Route("/api/v1/statuses/{contextBase64}")]
+        [Route("/users/{username}/statuses/{contextBase64}")]
+        public IActionResult Activity(string contextBase64)
         {
-            Response.Headers.Remove("X-Robots-Tag");
-            return Content("{\"id\":\"7523033599046667550\",\"url\":\"https://tiktok.com/@www.cherryfairy.com/video/7523033599046667550\",\"uri\":\"https://tiktok.com/@www.cherryfairy.com/video/7523033599046667550\",\"created_at\":\"2025-07-04T01:32:52.000Z\",\"content\":\"<b>❤️6.0M💬3.7k🔁141.6k</b>\",\"spoiler_text\":\"\",\"language\":null,\"visibility\":\"public\",\"application\":{\"name\":\"fxTikTok\",\"website\":\"https://github.com/okdargy/fxTikTok\"},\"media_attachments\":[{\"id\":\"7523033599046667550-video\",\"type\":\"video\",\"url\":\"https://offload.tnktok.com/generate/video/7523033599046667550\",\"preview_url\":\"https://offload.tnktok.com/generate/cover/7523033599046667550\",\"remote_url\":null,\"preview_remote_url\":null,\"text_url\":null,\"description\":null,\"meta\":{\"original\":{\"width\":576,\"height\":1024}}}],\"account\":{\"id\":\"www.cherryfairy.com\",\"display_name\":\"Cherryfairy\",\"username\":\"www.cherryfairy.com\",\"acct\":\"www.cherryfairy.com\",\"url\":\"https://tiktok.com/@www.cherryfairy.com\",\"created_at\":\"2022-06-20T20:29:27.000Z\",\"locked\":false,\"bot\":false,\"discoverable\":true,\"indexable\":false,\"group\":false,\"avatar\":\"https://offload.tnktok.com/generate/pfp/www.cherryfairy.com\",\"avatar_static\":\"https://offload.tnktok.com/generate/pfp/www.cherryfairy.com\",\"header\":null,\"header_static\":null,\"statuses_count\":0,\"hide_collections\":false,\"noindex\":false,\"emojis\":[],\"roles\":[],\"fields\":[]},\"mentions\":[],\"tags\":[],\"emojis\":[],\"card\":null,\"poll\":null}", "application/activity+json; charset=utf-8");
+            var base64EncodedBytes = Base64Url.Decode(contextBase64);
+            var contextParams = Encoding.UTF8.GetString(base64EncodedBytes).Split("&");
+
+            var postId = contextParams.First();
+            var orderString = contextParams.LastOrDefault();
+
+            int order = 0;
+            int.TryParse(orderString, out order);
+
+
+            Post? post = Db.Posts.Find(postId);
+
+            if (post == null)
+            {
+                return NotFound();
+            }
+
+            var media_attachments = new List<MediaAttachment>();
+
+            for (int i = 0; i < post.Media.Count; i++)
+            {
+                var media = post.Media.ElementAt(i);
+                media_attachments.Add(new MediaAttachment()
+                {
+                    id = postId,
+                    type = media.MediaType,
+                    url = $"https://{Request.Host}/offload/{postId}?order={i}",
+                    preview_url = $"https://{Request.Host}/offload/{postId}?order={i}&thumbnail=true",
+                    meta = new Meta()
+                    {
+                        original = new Original()
+                        {
+                            height = post.Height,
+                            width = post.Width,
+                            aspect = post.AspectRatio,
+                            size = post.Size
+                        }
+                    }
+                });
+            }
+
             var model = new ActivityPubModel()
             {
                 account = new Account()
                 {
-                    id = username,
-                    display_name = username,
-                    username = username,
-                    url = "https://instagram.com/" + username,
-                    avatar = "https://offload.tnktok.com/generate/pfp/www.cherryfairy.com",
-                    avatar_static = "https://offload.tnktok.com/generate/pfp/www.cherryfairy.com",
+                    id = post.AuthorUsername ?? string.Empty,
+                    display_name = post.AuthorName ?? string.Empty,
+                    username = post.AuthorUsername ?? string.Empty,
+                    url = "https://instagram.com/" + post.AuthorUsername,
+                    uri = "https://instagram.com/" + post.AuthorUsername,
+                    avatar = post.AvatarUrl ?? string.Empty,
+                    avatar_static = post.AvatarUrl ?? string.Empty,
                     created_at = DateTime.UtcNow,
-                    acct = username,
+                    acct = post.AuthorUsername ?? string.Empty,
 
                 },
-                media_attachments = new List<MediaAttachment>()
-                {
-                    new MediaAttachment()
-                    {
-                        id=postId,
-                        type = mediaType,
-                        url = link,
-                        preview_url = link,
-                        meta = new Meta()
-                        {
-                            original = new Original()
-                            {
-                                width = 576,
-                                height = 1024
-                            }
-                        }
-                    }
-                },
-                content = $"<b>❤️ {likes}</b>",
-                id = postId,
-                url = "www.instagram.com/p/" + postId + "/",
+
+                media_attachments = media_attachments,
+
+                content = $"<p>{post?.Caption}</p><b>❤️ {post?.Likes}&nbsp;&nbsp;&nbsp;💬 {post?.Comments}</b>",
+                id = contextBase64,
+                language = "en",
+
+                url = "https://www.instagram.com/p/" + postId + "/",
                 application = new Application()
                 {
                     name = "vxinstagram",
@@ -363,7 +435,7 @@ namespace InstagramEmbedForDiscord.Controllers
                 },
                 created_at = DateTime.UtcNow,
                 visibility = "public",
-                uri = "www.instagram.com/p/" + postId + "/"
+                uri = "https://www.instagram.com/p/" + postId + "/"
 
             };
 
@@ -377,64 +449,26 @@ namespace InstagramEmbedForDiscord.Controllers
             return Content(json, "application/json");
         }
 
-        private async Task<InstagramPostDetails> GetPostDetails(HttpClient client, string id)
+
+        private async Task<InstagramPostDetails> GetPostDetails(string id, bool skipMediaExtraction = false)
         {
             try
             {
-                var embedUrl = $"https://www.instagram.com/p/{id}/embed/captioned/";
-                var html = await client.GetStringAsync(embedUrl);
-
-                // Username
-                var usernameMatch = Regex.Match(html, @"<span class=""UsernameText"">(.*?)</span>");
-                string? username = usernameMatch.Success ? usernameMatch.Groups[1].Value : null;
-
-                // Likes
-                var likesMatch = Regex.Match(html, @"(\d[\d,\.]*) likes");
-                string? likes = likesMatch.Success ? likesMatch.Groups[1].Value : null;
-
-                // Profile avatar
-                var imgMatch = Regex.Match(html, @"<a class=""Avatar InsideRing"".*?<img src=""(.*?)""", RegexOptions.Singleline);
-                string? profileImg = imgMatch.Success ? imgMatch.Groups[1].Value : null;
-
-                // 🆕 Extract description
-                string? description = null;
-                var captionMatch = Regex.Match(
-                    html,
-                    @"<div class=""Caption"">(.*?)(<div class=""CaptionComments"">|</div>)",
-                    RegexOptions.Singleline
-                );
-                if (captionMatch.Success)
-                {
-                    var rawCaptionHtml = captionMatch.Groups[1].Value;
-
-                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<a class=""CaptionUsername"".*?</a>", "", RegexOptions.Singleline);
-
-                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<br\s*/?>", "\n");
-
-                    rawCaptionHtml = Regex.Replace(rawCaptionHtml, @"<.*?>", "");
-
-                    description = System.Net.WebUtility.HtmlDecode(rawCaptionHtml).Trim();
-                }
-
-                return new InstagramPostDetails
-                {
-                    Username = username,
-                    Avatar = profileImg,
-                    Likes = likes,
-                    Description = description
-                };
+                var response = await FetchInstagramPostAsync(id);
+                var post = ExtractInstagramPostDetails(response, skipMediaExtraction);
+                return post;
             }
-            catch
+            catch (Exception e)
             {
-                return new InstagramPostDetails();
+                return new InstagramPostDetails() { Username = "NOT_SET" };
             }
         }
 
 
-        private async Task<InstagramResponse> GetSnapsaveResponse(string link, HttpClient client)
+        private async Task<InstagramResponse> GetSnapsaveResponse(string link)
         {
 
-            HttpResponseMessage snapSaveResponse = await client.GetAsync("http://alsauce.com:3200/igdl?url=" + link);
+            HttpResponseMessage snapSaveResponse = await _regularClient.GetAsync("http://alsauce.com:3200/igdl?url=" + link);
             string snapSaveResponseString = await snapSaveResponse.Content.ReadAsStringAsync();
             InstagramResponse instagramResponse = JsonConvert.DeserializeObject<InstagramResponse>(snapSaveResponseString)!;
 
@@ -442,29 +476,87 @@ namespace InstagramEmbedForDiscord.Controllers
 
         }
 
-        private IActionResult ProcessSingleItem(InstagramMedia media, HttpClient client, string originalLink, bool isDirect = false) 
+        private async Task RefreshPostIfNeeded(Post post, bool scrapeForPostInfomration)
         {
-            var contentUrl = media.url;
+            //var response = await _regularClient.SendAsync(new HttpRequestMessage(HttpMethod.Head, post.Media.First().RapidSaveUrl));
+
+            //if (response.IsSuccessStatusCode)
+            //{
+            //    if (Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase) && post.AuthorUsername == "NOT_SET")
+            //    {
+            //        InstagramPostDetails postDetails = await GetPostDetails(post.ShortCode);
+            //        if (postDetails.Username == "NOT_SET") return;
+            //        post.AuthorUsername = postDetails.Username;
+            //        post.AuthorName = postDetails.Name;
+            //        post.Caption = postDetails.Description;
+            //        post.Comments = postDetails.Comments;
+            //        post.Likes = postDetails.Likes;
+
+            //        Db.SaveChanges();
+            //    }
+            //    return;
+            //}
+            if (!post.IsExpired)
+            {
+                if (scrapeForPostInfomration && post.AuthorUsername == "NOT_SET")
+                {
+                    InstagramPostDetails postDetails = await GetPostDetails(post.ShortCode, true);
+                    if (postDetails.Username == "NOT_SET") return;
+                    post.AuthorUsername = postDetails.Username;
+                    post.AvatarUrl = postDetails.Avatar;
+                    post.AuthorName = postDetails.Name;
+                    post.Caption = postDetails.Description;
+                    post.Comments = postDetails.Comments;
+                    post.Likes = postDetails.Likes;
+
+                    post.Height = postDetails.VideoHeight ?? post.Height;
+                    post.Width = postDetails.VideoWidth ?? post.Width;
+
+                    post.DefaultThumbnailUrl = postDetails.VideoThumbnail;
+                    post.TrackName = postDetails.TrackName;
+
+                    Db.SaveChanges();
+                }
+                return;
+            }
+
+            var instagramResponse = await GetSnapsaveResponse(post.RawUrl);
+            var mediaList = instagramResponse.url?.data?.media;
+
+            if (mediaList == null)
+            {
+                throw new Exception("NOT FOUND");
+            }
+
+            Db.Media.RemoveRange(post.Media);
+            post.Media.Clear();
+
+            foreach (var item in mediaList)
+            {
+                post.Media.Add(new Media() { MediaType = item.type, RapidSaveUrl = item.url, ThumbnailUrl = item.thumbnail });
+            }
+
+            post.ExpiresOn = DateTime.UtcNow.AddHours(12);
+
+            Db.SaveChanges();
+        }
+
+        private IActionResult ProcessSingleItem(InstagramMedia media, string originalLink, string id, bool isDirect)
+        {
+            string contentUrl = $"https://{Request.Host}/offload/{id}";
             var thumbnailUrl = media.thumbnail;
 
             bool isPhoto = media.type == "image";
 
-            // If direct subdomain, redirect directly to media
             if (isDirect)
-            {
                 return Redirect(contentUrl);
-            }
 
             if (isPhoto)
             {
-                //var imageBytes = await client.GetByteArrayAsync(contentUrl);
-
                 ViewBag.IsPhoto = true;
                 ViewBag.Files = new List<InstagramMedia>() { media };
                 return View(new string[] { contentUrl, thumbnailUrl, originalLink });
-                //return File(imageBytes, "image/jpeg");
             }
-
 
             string[] data = { contentUrl, thumbnailUrl, originalLink };
             ViewBag.IsPhoto = false;
@@ -472,19 +564,15 @@ namespace InstagramEmbedForDiscord.Controllers
             return View(data);
         }
 
-        private async Task<IActionResult> ProcessMultipleItems(List<InstagramMedia> media, string originalLink, string id, bool isDirect = false)
+        private async Task<IActionResult> ProcessMultipleItems(List<InstagramMedia> media, string originalLink, string id, bool isDirect)
         {
+            string contentUrl = $"https://{Request.Host}/offload/{id}";
 
-            string? fileName = await GetGeneratedFile(media, id);
-
-            if (fileName == null) return BadRequest("Could not process images.");
-
-            string contentUrl = $"https://{Request.Host}/generated/{fileName}";
-
-            // If direct subdomain, redirect directly to the generated grid image
             if (isDirect)
             {
-                return Redirect($"/generated/{fileName}");
+                var fileName = await GetGeneratedFile(media, id);
+                if (fileName != null)
+                    return Redirect($"/generated/{fileName}");
             }
 
             ViewBag.IsPhoto = true;
@@ -648,7 +736,7 @@ namespace InstagramEmbedForDiscord.Controllers
 
 
         }
-        private static string SanitizeFileName(string input, string replacement = "_")
+        private string SanitizeFileName(string input, string replacement = "_")
         {
             var invalidChars = Path.GetInvalidFileNameChars();
             foreach (var c in invalidChars)
@@ -657,7 +745,7 @@ namespace InstagramEmbedForDiscord.Controllers
             }
             return input;
         }
-        private static SKColor GetAverageColor(List<SKBitmap> bitmaps, bool skipTransparent = true, int step = 1)
+        private SKColor GetAverageColor(List<SKBitmap> bitmaps, bool skipTransparent = true, int step = 1)
         {
             if (bitmaps == null || bitmaps.Count == 0)
                 return SKColors.Transparent;
@@ -695,14 +783,377 @@ namespace InstagramEmbedForDiscord.Controllers
         }
 
 
+        public InstagramPostDetails ExtractInstagramPostDetails(string json, bool skipMediaExtraction = false)
+        {
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+
+            var item = root
+                .GetProperty("data")
+                .GetProperty("xdt_api__v1__media__shortcode__web_info")
+                .GetProperty("items")[0];
+
+            var user = item.GetProperty("user");
+
+
+            var details = new InstagramPostDetails
+            {
+                Username = user.GetProperty("username").GetString(),
+                Name = user.GetProperty("full_name").GetString(),
+                Avatar = user.GetProperty("profile_pic_url").GetString(),
+                Likes = item.TryGetProperty("like_count", out var likes) ? likes.GetInt32() : 0,
+                Comments = item.TryGetProperty("comment_count", out var comments) ? comments.GetInt32() : 0,
+                Description =
+                       item.TryGetProperty("caption", out var captionObj)
+                       && captionObj.ValueKind == JsonValueKind.Object
+                       && captionObj.TryGetProperty("text", out var textProp)
+                           ? textProp.GetString() ?? string.Empty
+                           : string.Empty
+            };
+
+            int mediaType = item.GetProperty("media_type").GetInt32();
+
+            JsonElement firstMediaItem = item;
+
+            if (mediaType == 8 && item.TryGetProperty("carousel_media", out var carousel))
+            {
+                if (carousel.ValueKind == JsonValueKind.Array && carousel.GetArrayLength() > 0)
+                    firstMediaItem = carousel[0];
+            }
+
+            // Determine if the first media item is video
+            int firstType = firstMediaItem.GetProperty("media_type").GetInt32();
+
+            if (firstType == 2)
+            {
+                details.IsVideo = true;
+
+                details.VideoWidth = firstMediaItem.GetProperty("original_width").GetInt32();
+                details.VideoHeight = firstMediaItem.GetProperty("original_height").GetInt32();
+
+                if (firstMediaItem.TryGetProperty("image_versions2", out var imageVersions)
+                    && imageVersions.TryGetProperty("candidates", out var candidates)
+                    && candidates.ValueKind == JsonValueKind.Array
+                    && candidates.GetArrayLength() > 0)
+                {
+                    details.VideoThumbnail = candidates[0].GetProperty("url").GetString();
+                }
+            }
+
+            details.TrackName = ExtractTrackName(item);
+            if (!skipMediaExtraction) details.Media = ExtractMedia(root);
+
+            return details;
+        }
+
+        public static string ExtractTrackName(JsonElement root)
+        {
+            if (!root.TryGetProperty("clips_metadata", out var clipsMetadata) || clipsMetadata.ValueKind != JsonValueKind.Object)
+            {
+                return "vxinstagram";
+            }
+
+            if (clipsMetadata.TryGetProperty("music_info", out var musicInfo)
+                && musicInfo.ValueKind == JsonValueKind.Object)
+            {
+                if (musicInfo.TryGetProperty("music_asset_info", out var asset)
+                    && asset.ValueKind == JsonValueKind.Object)
+                {
+                    string artist = asset.TryGetProperty("display_artist", out var a) ? a.GetString() ?? "" : "";
+                    string title = asset.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+
+                    if (!string.IsNullOrWhiteSpace(artist) || !string.IsNullOrWhiteSpace(title))
+                        return $"{artist} - {title}";
+                }
+            }
+
+            if (clipsMetadata.TryGetProperty("original_sound_info", out var original)
+                && original.ValueKind == JsonValueKind.Object)
+            {
+                if (original.TryGetProperty("original_audio_title", out var oTitle))
+                {
+                    var name = oTitle.GetString();
+                    if (!string.IsNullOrWhiteSpace(name))
+                        return name;
+                }
+            }
+
+            return "vxinstagram";
+        }
+
+        public static List<Media> ExtractMedia(JsonElement root)
+        {
+            var result = new List<Media>();
+
+            if (!root.TryGetProperty("data", out var data))
+                return result;
+
+            if (!data.TryGetProperty("xdt_api__v1__media__shortcode__web_info", out var webInfo))
+                return result;
+
+            if (!webInfo.TryGetProperty("items", out var items) || items.GetArrayLength() == 0)
+                return result;
+
+            var item = items[0];
+
+            // ------------------------------------------
+            // CASE 1: CAROUSEL
+            // ------------------------------------------
+            if (item.TryGetProperty("carousel_media", out var carousel) &&
+                carousel.ValueKind == JsonValueKind.Array &&
+                carousel.GetArrayLength() > 0)
+            {
+                int index = 0;
+                foreach (var mediaItem in carousel.EnumerateArray())
+                {
+                    var media = ExtractSingleMedia(mediaItem, index++);
+                    if (media != null)
+                        result.Add(media);
+                }
+
+                return result;
+            }
+
+            // ------------------------------------------
+            // CASE 2: SINGLE IMAGE / REEL / VIDEO
+            // ------------------------------------------
+            var single = ExtractSingleMedia(item, 0);
+            if (single != null)
+                result.Add(single);
+
+            return result;
+        }
+
+
+        private static Media? ExtractSingleMedia(JsonElement item, int index)
+        {
+            int mediaType = item.TryGetProperty("media_type", out var mt) ? mt.GetInt32() : 1;
+
+            // ==========================
+            // VIDEO
+            // ==========================
+            if (mediaType == 2)
+            {
+                string videoUrl = "";
+                string thumbnail = "";
+
+                if (item.TryGetProperty("video_versions", out var videos) &&
+                    videos.ValueKind == JsonValueKind.Array &&
+                    videos.GetArrayLength() > 0)
+                {
+                    // Best video: pick first or highest resolution
+                    var best = videos[0];
+                    if (best.TryGetProperty("url", out var vu))
+                        videoUrl = vu.GetString() ?? "";
+                }
+
+                // thumbnail from image_versions2
+                if (item.TryGetProperty("image_versions2", out var img) &&
+                    img.TryGetProperty("candidates", out var candidates) &&
+                    candidates.ValueKind == JsonValueKind.Array &&
+                    candidates.GetArrayLength() > 0)
+                {
+                    thumbnail = candidates[0].GetProperty("url").GetString() ?? "";
+                }
+
+                if (string.IsNullOrEmpty(videoUrl))
+                    return null;
+
+                return new Media
+                {
+                    MediaType = "video",
+                    RapidSaveUrl = videoUrl,
+                    ThumbnailUrl = thumbnail
+                };
+            }
+
+            // ==========================
+            // IMAGE
+            // ==========================
+            if (item.TryGetProperty("image_versions2", out var img2) &&
+                img2.TryGetProperty("candidates", out var imgs) &&
+                imgs.ValueKind == JsonValueKind.Array &&
+                imgs.GetArrayLength() > 0)
+            {
+                string url = imgs[0].GetProperty("url").GetString() ?? "";
+
+                return new Media
+                {
+                    MediaType = "image",
+                    RapidSaveUrl = url,
+                    ThumbnailUrl = url
+                };
+            }
+
+            return null;
+        }
+
+
+
+        public async Task<string> FetchInstagramPostAsync(string shortcode)
+        {
+            // Pick 3 random sessions
+            var sessions = Db.Sessions
+                .OrderBy(r => Guid.NewGuid())
+                .Take(3)
+                .ToList();
+
+            if (sessions.Count == 0)
+                return string.Empty;
+
+            string proxyUsername = "YOUR_PROXY_USERNAME";
+            string proxyPassword = "YOUR_PROXY_PASSWORD";
+
+
+            // Create 3 proxy clients
+            var clients = new[]
+            {
+                CreateProxyClient("http://geo.iproyal.com:12321", proxyUsername, proxyPassword),
+                CreateProxyClient("http://geo.iproyal.com:12321", proxyUsername, proxyPassword),
+                CreateProxyClient("http://geo.iproyal.com:12321", proxyUsername, proxyPassword),
+            };
+
+            var cts = new CancellationTokenSource();
+
+            // Run all fetch tasks
+            var tasks = new List<Task<(bool success, string json, Session session)>>();
+
+            for (int i = 0; i < sessions.Count; i++)
+            {
+                tasks.Add(TryFetchGraphQLAsync(shortcode, sessions[i].ID, clients[i], cts.Token));
+            }
+
+            while (tasks.Count > 0)
+            {
+                var finished = await Task.WhenAny(tasks);
+                tasks.Remove(finished);
+
+                var result = await finished;
+
+                if (result.success)
+                {
+                    // Cancel the rest
+                    cts.Cancel();
+                    return result.json;
+                }
+            }
+
+            return string.Empty; // all failed
+        }
+
+        private HttpClient CreateProxyClient(string proxyHost, string username, string password)
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy = new WebProxy(proxyHost)
+                {
+                    Credentials = new NetworkCredential(username, password)
+                },
+                UseProxy = true,
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            };
+
+            var client = new HttpClient(handler);
+
+            client.DefaultRequestHeaders.Add("Accept", "*/*");
+            client.DefaultRequestHeaders.Add("Accept-Language", "en-US,en;q=0.9");
+            client.DefaultRequestHeaders.Add("Origin", "https://www.instagram.com");
+            client.DefaultRequestHeaders.Add("Priority", "u=1, i");
+            client.DefaultRequestHeaders.Add("Sec-Fetch-Dest", "empty");
+            client.DefaultRequestHeaders.Add("Sec-Fetch-Mode", "cors");
+            client.DefaultRequestHeaders.Add("Sec-Fetch-Site", "same-origin");
+            client.DefaultRequestHeaders.UserAgent.ParseAdd(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
+            );
+
+            client.DefaultRequestHeaders.Add("X-Asbd-Id", "129477");
+            client.DefaultRequestHeaders.Add("X-Bloks-Version-Id", "e2004666934296f275a5c6b2c9477b63c80977c7cc0fd4b9867cb37e36092b68");
+            client.DefaultRequestHeaders.Add("X-Fb-Friendly-Name", "PolarisPostActionLoadPostQueryQuery");
+            client.DefaultRequestHeaders.Add("X-Ig-App-Id", "936619743392459");
+
+            return client;
+        }
+
+        private async Task<(bool success, string json, Session session)> TryFetchGraphQLAsync(string shortcode, int sessionId, HttpClient client, CancellationToken ct)
+        {
+            using var db = new InstagramContext();
+
+            var session = db.Sessions.Find(sessionId);
+            if (session == null) return (false, "", session);
+
+            try
+            {
+
+
+                var request = new HttpRequestMessage(HttpMethod.Post, "https://www.instagram.com/graphql/query/");
+
+                // ----- HEADERS -----
+                request.Headers.Add("Cookie", session.CSRFToken);
+                request.Headers.Add("x-root-field-name", "xdt_api__v1__web__accounts__get_encrypted_credentials");
+                request.Headers.Add("X-Fb-Lsd", "lvKgZqkPPmLKqUfKIBiMFa");
+                request.Headers.Add("X-Csrftoken", session.CSRFToken.Split("=").Last());
+                request.Headers.Add("Referer", $"https://www.instagram.com/p/{shortcode}");
+
+                // ----- BODY -----
+                var body = new Dictionary<string, string>
+        {
+            { "av", "kr65yh:qhc696:klxf8v" },
+            { "__d", "www" },
+            { "__user", "0" },
+            { "__a", "1" },
+            { "__req", "k" },
+            { "__hs", "19888.HYP:instagram_web_pkg.2.1..0.0" },
+            { "dpr", "2" },
+            { "__ccg", "UNKNOWN" },
+            { "__rev", "1014227545" },
+            { "__s", "trbjos:n8dn55:yev1rm" },
+            { "__hsi", "7573775717678450108" },
+            { "__dyn", "7xeUjG1mxu1syUbFp40NonwgU7SbzEdF8aUco2qwJw5ux609vCwjE1xoswaq0yE6ucw5Mx62G5UswoEcE7O2l0Fwqo31w9a9wtUd8-U2zxe2GewGw9a362W2K0zK5o4q3y1Sx-0iS2Sq2-azo7u3C2u2J0bS1LwTwKG1pg2fwxyo6O1FwlEcUed6goK2O4UrAwCAxW6Uf9EObzVU8U" },
+            { "__csr", "n2Yfg_5hcQAG5mPtfEzil8Wn-DpKGBXhdczlAhrK8uHBAGuKCJeCieLDyExenh68aQAKta8p8ShogKkF5yaUBqCpF9XHmmhoBXyBKbQp0HCwDjqoOepV8Tzk8xeXqAGFTVoCciGaCgvGUtVU-u5Vp801nrEkO0rC58xw41g0VW07ISyie2W1v7F0CwYwwwvEkw8K5cM0VC1dwdi0hCbc094w6MU1xE02lzw" },
+            { "__comet_req", "7" },
+            { "lsd", "lvKgZqkPPmLKqUfKIBiMFa" },
+            { "jazoest", "2882" },
+            { "__spin_r", "1014227545" },
+            { "__spin_b", "trunk" },
+            { "__spin_t", "1718406700" },
+            { "fb_api_caller_class", "RelayModern" },
+            { "fb_api_req_friendly_name", "PolarisPostActionLoadPostQueryQuery" },
+            { "variables", $"{{\"shortcode\":\"{shortcode}\"}}" },
+            { "server_timestamps", "true" },
+            { "doc_id", "25018359077785073" }
+        };
+
+                request.Content = new FormUrlEncodedContent(body);
+
+                // ----- SEND -----
+                var response = await client.SendAsync(request, ct);
+                var content = await response.Content.ReadAsStringAsync(ct);
+
+                // Reject HTML (challenge, login, 429, block)
+                if (content.StartsWith("<!DOCTYPE html") || content.Contains("not-logged-in"))
+                {
+                    session.ExpireSession();
+                    Db.SaveChanges();
+                    return (false, "", session);
+                }
+
+                return (true, content, session);
+            }
+            catch
+            {
+                session.ExpireSession();
+                Db.SaveChanges();
+                return (false, "", session);
+            }
+        }
+
 
     }
 
 
 
 
-
-
+    // Models
 
     public class InstagramMedia
     {
@@ -729,11 +1180,24 @@ namespace InstagramEmbedForDiscord.Controllers
 
     public class InstagramPostDetails
     {
-        public string? Username { get; set; } = string.Empty;
-        public string? Avatar { get; set; } = string.Empty;
-        public string? Likes { get; set; } = string.Empty;
-        public string? Description { get; set; } = string.Empty;
+        public string? Username { get; set; }
+        public string? Name { get; set; }
+        public string? Avatar { get; set; }
+
+        public int Likes { get; set; }
+        public int Comments { get; set; }
+        public string? Description { get; set; }
+
+        public bool IsVideo { get; set; }
+        public int? VideoWidth { get; set; }
+        public int? VideoHeight { get; set; }
+        public string? VideoThumbnail { get; set; }
+
+        public string? TrackName { get; set; }
+
+        public List<Media> Media { get; set; } = [];
     }
+
 
 
 
@@ -748,7 +1212,6 @@ namespace InstagramEmbedForDiscord.Controllers
         public string provider_url { get; set; }
         public string title { get; set; }
     }
-    // Root myDeserializedClass = JsonConvert.DeserializeObject<Root>(myJsonResponse);
     public class Account
     {
         public string id { get; set; }
@@ -756,6 +1219,7 @@ namespace InstagramEmbedForDiscord.Controllers
         public string username { get; set; }
         public string acct { get; set; }
         public string url { get; set; }
+        public string uri { get; set; }
         public DateTime created_at { get; set; }
         public bool locked { get; set; }
         public bool bot { get; set; }
@@ -764,21 +1228,28 @@ namespace InstagramEmbedForDiscord.Controllers
         public bool group { get; set; }
         public string avatar { get; set; }
         public string avatar_static { get; set; }
-        public object header { get; set; }
-        public object header_static { get; set; }
-        public int statuses_count { get; set; }
+
+        // Instagram/tiktok-style accounts may not have headers → keep object
+
+        // Present in your Instagram JSON
+        public int followers_count { get; set; }
+        public int following_count { get; set; }
+
         public bool hide_collections { get; set; }
         public bool noindex { get; set; }
-        public List<object> emojis { get; set; } = new List<object>();
-        public List<object> roles { get; set; } = new List<object>();
-        public List<object> fields { get; set; } = new List<object>();
+
+        public List<object> emojis { get; set; } = new();
+        public List<object> roles { get; set; } = new();
+        public List<object> fields { get; set; } = new();
     }
+
 
     public class Application
     {
         public string name { get; set; }
         public string website { get; set; }
     }
+
 
     public class MediaAttachment
     {
@@ -793,38 +1264,85 @@ namespace InstagramEmbedForDiscord.Controllers
         public Meta meta { get; set; }
     }
 
+
     public class Meta
     {
         public Original original { get; set; }
     }
 
+
     public class Original
     {
+        public double aspect { get; set; }
+
         public int width { get; set; }
         public int height { get; set; }
+
+        public string size { get; set; } // "720x1280"
     }
+
 
     public class ActivityPubModel
     {
         public string id { get; set; }
         public string url { get; set; }
         public string uri { get; set; }
+
         public DateTime created_at { get; set; }
+        public DateTime? edited_at { get; set; }
+
         public string content { get; set; }
-        public string spoiler_text { get; set; }
-        public object language { get; set; }
+        public string spoiler_text { get; set; } = string.Empty;
+        public string language { get; set; }
+
         public string visibility { get; set; }
+
         public Application application { get; set; }
-        public List<MediaAttachment> media_attachments { get; set; }
+        public List<MediaAttachment> media_attachments { get; set; } = new();
+
         public Account account { get; set; }
-        public List<object> mentions { get; set; }
-        public List<object> tags { get; set; }
-        public List<object> emojis { get; set; }
+
+        public string in_reply_to_id { get; set; }
+        public string in_reply_to_account_id { get; set; }
+
+        public List<object> mentions { get; set; } = new();
+        public List<object> tags { get; set; } = new();
+        public List<object> emojis { get; set; } = new();
+
         public object card { get; set; }
         public object poll { get; set; }
+
+        public object reblog { get; set; }
     }
 
 
 
 
+    public static class Base64Url
+    {
+        public static string Encode(byte[] bytes)
+        {
+            var base64 = Convert.ToBase64String(bytes);     // Standard Base64
+            return base64
+                .Replace("+", "-")                         // URL safe replacements
+                .Replace("/", "_")
+                .TrimEnd('=');                              // Remove padding
+        }
+
+        public static byte[] Decode(string base64Url)
+        {
+            string base64 = base64Url
+                .Replace("-", "+")                         // Undo URL-safe replacements
+                .Replace("_", "/");
+
+            // Add removed padding back
+            switch (base64.Length % 4)
+            {
+                case 2: base64 += "=="; break;
+                case 3: base64 += "="; break;
+            }
+
+            return Convert.FromBase64String(base64);
+        }
+    }
 }

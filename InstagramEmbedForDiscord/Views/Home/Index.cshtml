@@ -1,4 +1,5 @@
 @using InstagramEmbedForDiscord.Controllers;
+@using InstagramEmbed.Domain.Entities;
 @model string[]
 @{
     Layout = null;
@@ -15,15 +16,18 @@
 
     if(contentUrl.Contains("rapidcdn"))
     {
-        contentUrl = $"{baseUrl}/VerifySnapsaveLink?postid={postId}&order={order}&rapidsaveUrl={contentUrl}";
+        contentUrl = $"{baseUrl}/offload/{postId}/{order}/";
     }
 
-    // int width = ViewBag.Width ?? 0;
-    // int height = ViewBag.Height ?? 0;
-
-    InstagramPostDetails? postDetails = ViewBag.PostDetails;
+    Post? post = ViewBag.Post;
 
     List<InstagramMedia> files = ViewBag.Files ?? new List<InstagramMedia>();
+
+    if (post != null && !Context.Request.Host.Host.EndsWith("d.vxinstagram.com", StringComparison.OrdinalIgnoreCase))
+    {
+        post.AuthorUsername = null;
+        post.Caption = null;
+    }
 }
 <!DOCTYPE html>
 <html lang="en">
@@ -31,12 +35,32 @@
     <link rel="stylesheet" href="~/lib/bootstrap/dist/css/bootstrap.min.css" />
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    @if (post?.TrackName == "vxinstagram")
+    {
+        <link href='~/favicon.png' rel='icon' sizes='svgxsvg' type='image/svg+xml'>
+        <link href='~/favicon-32x32.png' rel='icon' sizes='32x32' type='image/png'>
+        <link href='~/favicon-16x16.png' rel='icon' sizes='16x16' type='image/png'>
+    }
+    else
+    {
+        <link href='~/favicon-note.png' rel='icon' sizes='svgxsvg' type='image/svg+xml'>
+        <link href='~/favicon-note-32x32.png' rel='icon' sizes='32x32' type='image/png'>
+        <link href='~/favicon-note-16x16.png' rel='icon' sizes='16x16' type='image/png'>
+    }
+
+
     @if(isPhoto)
     {
         <meta property="og:image" content="@contentUrl" />
         <meta name="twitter:card" content="summary_large_image">
         <meta name="twitter:image" content="@contentUrl" />
-    }
+
+        @if (post?.Caption != null)
+        {
+            <meta property="og:description"
+                  content="@post.Caption">
+        }
+  }
     else
     {
         <meta property="og:type" content="video.other" />
@@ -56,30 +80,26 @@
 
     }
     
-     <meta property="og:site_name" content="InstagramEmbed" />
+    <meta property="og:site_name" content="InstagramEmbed @(post != null ? $"❤️ {post.Likes} 💬 {post.Comments}" : "")" />
     <meta property="theme-color" content="#eb4034" />
-    <meta property="og:title" content="@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")" />
-    <meta name="twitter:title" content="@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")" />
-    <meta property="twitter:site" content="@postDetails?.Username" />
-    @if(postDetails?.Description != null)
-    {
-        <meta property="og:description" content="@postDetails.Description" />
-        <meta name="twitter:description" content="@postDetails.Description" />
-    }
+    <meta property="twitter:title" content="@post?.AuthorUsername" />
+    <meta property="twitter:site" content="@post?.AuthorUsername" />
     <link rel="canonical" href="@url" />
     <meta property="og:url" content="@url" />
 
     
-    @if(postDetails!=null)
+    @if (post?.Caption != null)
     {
+        <meta property="og:title" content="@($"{post?.AuthorName} (@{post?.AuthorUsername})")" />
+
          <link rel="alternate" type="application/json+oembed"
-              href="@(baseUrl)/oembed?username=@postDetails.Username&desc=@(isPhoto?null:postDetails.Description)" /> 
-@*         <link rel="alternate" type="application/activity+json"
-              href="@(baseUrl)/activity?link=@Uri.EscapeDataString(contentUrl)&username=@postDetails.Username&avatar=@postDetails.Avatar&likes=@postDetails.Likes&postId=@postId&mediaType=@(isPhoto ? "image" : "video")"/>
- *@     }
+              href="@(baseUrl)/oembed?username=@post.AuthorUsername&desc=@(isPhoto?null:Uri.EscapeDataString(post?.Caption??""))&likescomments=@($" ❤️ {post?.Likes} 💬 {post?.Comments}")" />
+        <link rel="alternate" type="application/activity+json"
+              href="@(baseUrl)/users/username/statuses/@(Base64Url.Encode(System.Text.Encoding.UTF8.GetBytes(post!.ShortCode+$"&{order}") ))" />
+     }
   
     
-    <title>@(postDetails?.Username != null ? "@" + postDetails.Username : "InstagramEmbed")</title>
+    <title>@(post?.AuthorUsername != null ? "@" + post.AuthorUsername : "InstagramEmbed")</title>
 </head>
 <body class="bg-dark text-light position-relative" style="min-height: 100vh;">
 
@@ -117,7 +137,7 @@
     <div class="row g-5 align-items-center w-100 justify-content-center mx-auto px-4">
         @foreach (var item in files)
         {
-            var contentUrlForItem = $"{baseUrl}/VerifySnapsaveLink?postid={postId}&order={files.IndexOf(item)+1}&rapidsaveUrl={item.url}";
+            var contentUrlForItem = item.url;
             <div class="col-12 col-md-6 col-lg-4">
             <div class="card-body my-auto shadow px-0 py-0 bg-dark text-light border border-secondary pb-3" style="height:fit-content;flex:0;border-radius:1rem">
                 <div class="media-container w-100">
